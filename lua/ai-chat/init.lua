@@ -1,10 +1,14 @@
 local M = {}
-local job = require("ai-chat.job")
 
 local default_opts = {
   model = "claude-sonnet-4-6",
   max_tokens = 8096,
   deno_script = nil,
+  window = {
+    width = 0.4,
+    input_height = 5,
+    side = "left",
+  },
 }
 
 M.opts = vim.deepcopy(default_opts)
@@ -19,53 +23,26 @@ local function resolve_deno_script()
   return (source:gsub("lua/ai%-chat/init%.lua$", "deno/main.ts"))
 end
 
-function M.test_send(prompt)
-  vim.cmd("vnew")
-  local buf = vim.api.nvim_get_current_buf()
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].filetype = "ai-chat"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "> " .. prompt, "" })
+local function with_deno_script()
+  local copy = vim.tbl_deep_extend("force", {}, M.opts)
+  copy.deno_script = copy.deno_script or resolve_deno_script()
+  return copy
+end
 
-  local function append(text)
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      vim.bo[buf].modifiable = true
-      local lines = vim.split(text, "\n", { plain = true })
-      local last = vim.api.nvim_buf_get_lines(buf, -2, -1, false)[1] or ""
-      lines[1] = last .. lines[1]
-      vim.api.nvim_buf_set_lines(buf, -2, -1, false, lines)
-    end)
-  end
+function M.open()
+  require("ai-chat.chat").open(with_deno_script())
+end
 
-  local job_id
-  job_id = job.start({
-    deno_script = resolve_deno_script(),
-    payload = {
-      model = M.opts.model,
-      system = "",
-      messages = { { role = "user", content = prompt } },
-      max_tokens = M.opts.max_tokens,
-    },
-    on_text = append,
-    on_done = function()
-      vim.schedule(function()
-        if vim.api.nvim_buf_is_valid(buf) then
-          vim.bo[buf].modifiable = false
-        end
-      end)
-    end,
-    on_error = function(msg)
-      vim.schedule(function()
-        append("\n[ERROR] " .. msg .. "\n")
-        vim.notify(msg, vim.log.levels.ERROR, { title = "ai-chat" })
-      end)
-    end,
-  })
+function M.close()
+  require("ai-chat.chat").close()
+end
 
-  vim.keymap.set("n", "<C-c>", function()
-    job.stop(job_id)
-  end, { buffer = buf, silent = true, desc = "ai-chat: stop streaming" })
+function M.toggle_focus()
+  require("ai-chat.chat").toggle_focus(with_deno_script())
+end
+
+function M.send()
+  require("ai-chat.chat").send(with_deno_script())
 end
 
 return M
