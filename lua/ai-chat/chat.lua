@@ -1,5 +1,6 @@
 local M = {}
 local job = require("ai-chat.job")
+local context = require("ai-chat.context")
 
 local state = {}
 
@@ -157,6 +158,25 @@ function M.toggle_focus(opts)
   end
 end
 
+function M.open_with_sel(opts, sel)
+  local just_opened = not is_open()
+  if just_opened then
+    M.open(opts)
+  end
+  state.sel = sel
+  if state.input_buf and vim.api.nvim_buf_is_valid(state.input_buf) then
+    local first_line = vim.api.nvim_buf_get_lines(state.input_buf, 0, 1, false)[1] or ""
+    if not first_line:match("@sel") then
+      local new_first = "@sel " .. first_line
+      vim.api.nvim_buf_set_lines(state.input_buf, 0, 1, false, { new_first })
+      if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
+        pcall(vim.api.nvim_win_set_cursor, state.input_win, { 1, #new_first })
+      end
+    end
+  end
+  focus_input()
+end
+
 function M.stop_job()
   if state.job_id then
     job.stop(state.job_id)
@@ -185,7 +205,8 @@ function M.send(opts)
   append_lines(state.output_buf, user_lines)
   scroll_to_bottom(state.output_win, state.output_buf)
 
-  table.insert(state.messages, { role = "user", content = prompt })
+  local user_content = context.build_user_content(prompt, state)
+  table.insert(state.messages, { role = "user", content = user_content })
   state.assistant_acc = ""
 
   local function on_text(text)

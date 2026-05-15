@@ -45,4 +45,8 @@ function M.send()
   require("ai-chat.chat").send(with_deno_script())
 end
 
+function M.open_with_sel(sel)
+  require("ai-chat.chat").open_with_sel(with_deno_script(), sel)
+end
+
 return M
