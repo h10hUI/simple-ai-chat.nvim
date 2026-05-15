@@ -1,11 +1,13 @@
 {
   "tasks": {
-    "run": "deno run --allow-net=api.anthropic.com --allow-env=ANTHROPIC_API_KEY main.ts",
+    "run": "deno run --allow-net=api.anthropic.com --allow-env main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",
     "test": "deno test --allow-env"
   },
-  "imports": {},
+  "imports": {
+    "@anthropic-ai/sdk": "npm:@anthropic-ai/sdk@^0.96.0"
+  },
   "lock": true,
   "fmt": {
     "indentWidth": 2,
