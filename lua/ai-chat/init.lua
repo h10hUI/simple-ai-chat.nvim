@@ -49,4 +49,8 @@ function M.open_with_sel(sel)
   require("ai-chat.chat").open_with_sel(with_deno_script(), sel)
 end
 
+function M.pin(token)
+  require("ai-chat.chat").pin(token)
+end
+
 return M

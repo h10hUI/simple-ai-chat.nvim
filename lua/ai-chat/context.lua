@@ -188,4 +188,11 @@ function M.build_user_content(prompt, state)
   return table.concat(blocks, "\n\n") .. "\n\n" .. prompt
 end
 
+function M.extract_token_keys(prompt)
+  local tokens = extract_tokens(prompt)
+  local set = {}
+  for _, t in ipairs(tokens) do set[t.key] = true end
+  return set
+end
+
 return M

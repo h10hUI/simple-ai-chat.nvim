@@ -1,6 +1,7 @@
 local M = {}
 local job = require("ai-chat.job")
 local context = require("ai-chat.context")
+local commands = require("ai-chat.commands")
 
 local state = {}
 
@@ -55,6 +56,33 @@ local function focus_output()
   end
 end
 
+local function build_winbar(stickies)
+  if not stickies or #stickies == 0 then
+    return "📌 (none)"
+  end
+  return "📌 " .. table.concat(stickies, " ")
+end
+
+local function update_winbar()
+  if state.input_win and vim.api.nvim_win_is_valid(state.input_win) then
+    vim.wo[state.input_win].winbar = build_winbar(state.stickies)
+  end
+end
+
+local function output_append(lines)
+  if not (state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf)) then return end
+  append_lines(state.output_buf, lines)
+  scroll_to_bottom(state.output_win, state.output_buf)
+end
+
+local function build_cmd_ctx()
+  return {
+    append_output_lines = output_append,
+    update_winbar = update_winbar,
+    close = function() M.close() end,
+  }
+end
+
 local function bufmap(buf, mode, lhs, rhs, desc)
   vim.keymap.set(mode, lhs, rhs, { buffer = buf, silent = true, desc = desc })
 end
@@ -62,6 +90,13 @@ end
 local function setup_output_keymaps(buf)
   bufmap(buf, "n", "i", focus_input, "ai-chat: focus input")
   bufmap(buf, "n", "<C-c>", function() M.stop_job() end, "ai-chat: stop streaming")
+  bufmap(buf, "n", "gp", function()
+    local word = vim.fn.expand("<cWORD>")
+    local cleaned = word:match("^(@[%w:/._%-]+)")
+    if cleaned then
+      require("ai-chat").pin(cleaned)
+    end
+  end, "ai-chat: pin context under cursor")
 end
 
 local function setup_input_keymaps(buf)
@@ -86,6 +121,9 @@ function M.open(opts)
   state.messages = {}
   state.prompt_history = {}
   state.history_index = nil
+  state.stickies = {}
+  state.system = ""
+  state.session_model = nil
 
   vim.cmd("topleft vsplit")
   state.output_win = vim.api.nvim_get_current_win()
@@ -116,6 +154,8 @@ function M.open(opts)
   vim.bo[state.input_buf].filetype = "ai-chat-input"
   vim.bo[state.input_buf].modifiable = true
   vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+
+  update_winbar()
 
   setup_output_keymaps(state.output_buf)
   setup_input_keymaps(state.input_buf)
@@ -184,6 +224,15 @@ function M.stop_job()
   end
 end
 
+function M.pin(token)
+  if not state.stickies then state.stickies = {} end
+  for _, s in ipairs(state.stickies) do
+    if s == token then return end
+  end
+  table.insert(state.stickies, token)
+  update_winbar()
+end
+
 function M.send(opts)
   if state.job_id then return end
   if not is_open() then return end
@@ -192,22 +241,43 @@ function M.send(opts)
   local prompt = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
   if #prompt == 0 then return end
 
+  -- 入力 buf をクリア（コマンド処理で state がリセットされる前に先に行う）
+  vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
+
+  -- スラッシュコマンド
+  if commands.handle(prompt, state, build_cmd_ctx()) then
+    return
+  end
+
   table.insert(state.prompt_history, prompt)
   state.history_index = nil
 
-  vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
+  -- スティッキー prepend（本文に既出のものは除外）
+  local effective_prompt = prompt
+  if state.stickies and #state.stickies > 0 then
+    local in_prompt = context.extract_token_keys(prompt)
+    local additions = {}
+    for _, t in ipairs(state.stickies) do
+      if not in_prompt[t] then table.insert(additions, t) end
+    end
+    if #additions > 0 then
+      effective_prompt = table.concat(additions, " ") .. " " .. prompt
+    end
+  end
 
+  local model = state.session_model or opts.model
+
+  -- 出力 buf には原文を表示
   local user_lines = { "**You**:", "" }
   for _, line in ipairs(vim.split(prompt, "\n", { plain = true })) do
     table.insert(user_lines, line)
   end
   table.insert(user_lines, "")
-  table.insert(user_lines, "**" .. opts.model .. "**:")
+  table.insert(user_lines, "**" .. model .. "**:")
   table.insert(user_lines, "")
-  append_lines(state.output_buf, user_lines)
-  scroll_to_bottom(state.output_win, state.output_buf)
+  output_append(user_lines)
 
-  local user_content = context.build_user_content(prompt, state)
+  local user_content = context.build_user_content(effective_prompt, state)
   table.insert(state.messages, { role = "user", content = user_content })
   state.assistant_acc = ""
 
@@ -249,8 +319,8 @@ function M.send(opts)
   state.job_id = job.start({
     deno_script = opts.deno_script,
     payload = {
-      model = opts.model,
-      system = "",
+      model = model,
+      system = state.system or "",
       messages = vim.deepcopy(state.messages),
       max_tokens = opts.max_tokens,
     },
