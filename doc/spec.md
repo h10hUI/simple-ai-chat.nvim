@@ -50,7 +50,11 @@ deno/
 
 - **Neovim** >= 0.9
 - **Deno** >= 1.40（PATH に通っていること）
-- **Anthropic API キー**（環境変数 `ANTHROPIC_API_KEY`）
+- **API キー**（環境変数、使うプロバイダーのみ必要）：
+  - `ANTHROPIC_API_KEY` — Anthropic（Claude）
+  - `OPENAI_API_KEY` — OpenAI
+  - `GEMINI_API_KEY` — Google Gemini
+  - `DEEPSEEK_API_KEY` — DeepSeek
 - Neovim プラグイン依存：**なし**
 
 ---
@@ -233,6 +237,35 @@ SEARCH 文字列がファイル内に見つからない場合は通知してタ�
 
 プラグインは送信時、上記書式（特に SEARCH/REPLACE）の指示文をデフォルト system プロンプトとして自動で前置する。ユーザーが `/system` で設定した内容はその後ろに追記される。これにより AI は常に部分書き換えの SEARCH/REPLACE で変更を返すようになる。
 
+### マルチプロバイダー対応
+
+Anthropic（Claude）に加えて、OpenAI 互換 API を提供するプロバイダー（OpenAI / Google Gemini / DeepSeek）をサポートする。**Deno 側だけで完結**させ、Lua 側からは透過的（`/model <name>` で切り替えるだけ）。
+
+#### ルーティング
+
+`model` 名のプレフィックスでアダプタを振り分ける：
+
+| プレフィックス | プロバイダー | baseURL | API キー（env） |
+| --- | --- | --- | --- |
+| `claude-*` | Anthropic | (SDK デフォルト) | `ANTHROPIC_API_KEY` |
+| `gpt-*`, `o1*`, `o3*` | OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `gemini-*` | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` |
+| `deepseek-*` | DeepSeek | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
+
+#### 実装方針
+
+- **Anthropic 経路**：`@anthropic-ai/sdk` を使う。`system` は top-level 引数、`messages` の途中に `cache_control: { type: "ephemeral" }` を入れてプロンプトキャッシュ有効。
+- **OpenAI 互換経路**：`npm:openai` SDK を `baseURL` 切り替えで利用。`system` は `messages` 配列の先頭に `{ role: "system", content: "..." }` として挿入。`cache_control` は付けない（各プロバイダーが自動キャッシュを行う前提）。
+- stdin で受け取る JSON 構造（`model` / `system` / `messages` / `max_tokens`）は変えない。
+- usage はプロバイダーごとに形式が違うが、統一しない。各経路で**人間可読な 1 行文字列**にしてから `USAGE: ...` として stderr に書く（前述「stderr の用途」参照）。
+
+#### 採用しない選択肢
+
+- OpenRouter / LiteLLM のような統合プロキシ経由は採用しない（各プロバイダーを直叩き、コスト最優先）。
+- モデル一覧の自動取得・補完は行わない（`/model <name>` を手動指定する前提）。
+
+---
+
 ### プロジェクト指示の自動読み込み（CLAUDE.md）
 
 送信時、Neovim の cwd 配下に以下のファイルがあれば自動で内容を読み込み、system プロンプトに連結する：
@@ -270,14 +303,26 @@ SEARCH 文字列がファイル内に見つからない場合は通知してタ�
 }
 ```
 
+Lua 側は **プロバイダーを意識しない**。Deno 側が `model` プレフィックスでプロバイダーを判定する（後述「マルチプロバイダー対応」）。
+
 ### 出力（stdout）
 
-ストリーミングデルタをテキストとして逐次 stdout に書き出す。  
-終了時に `\n[DONE]\n` を出力する。
+ストリーミングデルタをテキストとして逐次 stdout に書き出す。終了時に `\n[DONE]\n` を出力する。
 
-### エラー
+### stderr の用途
 
-stderr にエラーメッセージを書き出す。Lua 側は `on_stderr` で受け取り、チャットウィンドウにエラー表示する。
+stderr は次の 2 種類の出力に使う。Lua 側は行頭で振り分ける。
+
+- `USAGE: <human-readable line>` — 1 件のリクエストの usage 情報。Lua 側は `USAGE: ` 以降の文字列をそのまま出力ペインに追記する（パース・整形しない）。Deno 側でプロバイダーごとに人間可読な形に整形してから書き出す。
+- それ以外 — エラーメッセージ。Lua 側は `on_stderr` で受け取りチャットウィンドウにエラー表示する。
+
+usage の例：
+
+```
+USAGE: input=42 cached_read=2071 cached_write=0 output=128
+```
+
+usage のフィールドはプロバイダーごとに異なってよい（Anthropic と OpenAI 互換で形が違うが、それぞれの形を保ったまま 1 行文字列にする）。
 
 ---
 
@@ -365,11 +410,28 @@ require('ai-chat').setup({
 
 - spec.md「差分適用仕様」とコードブロック系キーマップが全て動作する
 
+### Step 6: マルチプロバイダー対応
+
+**スコープ**
+
+- `deno/api.ts` に OpenAI 互換アダプタ `streamTextOpenAICompat()` を追加（既存の Anthropic 経路 `streamText()` はそのまま残す）
+- `deno/main.ts` で `model` プレフィックスを判定して呼び分け（`claude-*` → Anthropic、`gpt-*`/`o1*`/`o3*` → OpenAI、`gemini-*` → Gemini、`deepseek-*` → DeepSeek）
+- `deno/deno.json` の `imports` に `npm:openai` を追加
+- OpenAI 互換経路では `system` を `messages` 先頭に `role: "system"` で挿入、`cache_control` は付けない
+- 環境変数：`OPENAI_API_KEY` / `GEMINI_API_KEY` / `DEEPSEEK_API_KEY` を各経路で個別に読む
+- usage は各プロバイダーの形式のまま、Deno 側で人間可読な 1 行に整形して `USAGE: ...` を stderr に書く
+- Lua 側は変更なし
+
+**完了条件**
+
+- `/model gpt-4o`、`/model gemini-2.5-flash`、`/model deepseek-chat`、`/model claude-sonnet-4-6` のいずれを指定しても応答が返り、出力ペインに usage 行が表示される
+- 環境変数が未設定のプロバイダーを使うとエラーが stderr に出てチャットに表示される
+
 ---
 
 ## 未対応（スコープ外）
 
 - telescope / fzf-lua との連携
 - セッション保存・復元
-- マルチプロバイダー対応（Anthropic 以外）
 - ビジュアルモードでのインライン編集
+- OpenRouter / LiteLLM 等の統合プロキシ経由（直叩き方式を維持）
