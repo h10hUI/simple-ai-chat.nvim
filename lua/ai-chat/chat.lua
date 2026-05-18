@@ -2,6 +2,31 @@ local M = {}
 local job = require("ai-chat.job")
 local context = require("ai-chat.context")
 local commands = require("ai-chat.commands")
+local diff = require("ai-chat.diff")
+
+local BASE_SYSTEM = [[
+ファイルを修正するときは、必ず次の SEARCH/REPLACE 形式のコードブロックで変更部分のみを返してください。ファイル全文を返す必要はありません。
+
+```<lang>:<path>
+<<<<<<< SEARCH
+<変更前のコード。既存ファイルの内容と完全一致する必要があります（空白・インデントを含む）>
+=======
+<変更後のコード>
+>>>>>>> REPLACE
+```
+
+- 1 ファイルに複数の変更がある場合は、SEARCH/REPLACE ブロックを 1 つのコードブロック内に複数並べてください。
+- SEARCH 部分はファイル内で一意に特定できる十分な context（前後数行）を含めてください。
+- 新規ファイル作成の場合は SEARCH を空にして REPLACE のみ書いてください。
+- ファイル全文を書き換える必要がある場合のみ、SEARCH/REPLACE を使わずに通常のコードブロックでファイル全文を返してください。
+]]
+
+local function build_system(user_system)
+  if user_system and user_system ~= "" then
+    return BASE_SYSTEM .. "\n\n" .. user_system
+  end
+  return BASE_SYSTEM
+end
 
 local state = {}
 
@@ -97,6 +122,11 @@ local function setup_output_keymaps(buf)
       require("ai-chat").pin(cleaned)
     end
   end, "ai-chat: pin context under cursor")
+  bufmap(buf, "n", "ga", function() require("ai-chat").apply_block_at_cursor() end, "ai-chat: apply diff at cursor")
+  bufmap(buf, "n", "gA", function() require("ai-chat").apply_all_blocks() end, "ai-chat: apply all diffs")
+  bufmap(buf, "n", "gy", function() require("ai-chat").yank_block_at_cursor() end, "ai-chat: yank code block")
+  bufmap(buf, "n", "]]", function() require("ai-chat").next_block() end, "ai-chat: next code block")
+  bufmap(buf, "n", "[[", function() require("ai-chat").prev_block() end, "ai-chat: prev code block")
 end
 
 local function setup_input_keymaps(buf)
@@ -320,7 +350,7 @@ function M.send(opts)
     deno_script = opts.deno_script,
     payload = {
       model = model,
-      system = state.system or "",
+      system = build_system(state.system),
       messages = vim.deepcopy(state.messages),
       max_tokens = opts.max_tokens,
     },
@@ -328,6 +358,61 @@ function M.send(opts)
     on_done = on_done,
     on_error = on_error,
   })
+end
+
+function M.apply_block_at_cursor()
+  if not (state.output_buf and state.output_win and vim.api.nvim_win_is_valid(state.output_win)) then return end
+  local row = vim.api.nvim_win_get_cursor(state.output_win)[1]
+  local block = diff.find_block_at_cursor(state.output_buf, row)
+  if not block then
+    vim.notify("No code block at cursor", vim.log.levels.WARN, { title = "ai-chat" })
+    return
+  end
+  diff.show_diff_for_block(block, state, nil)
+end
+
+function M.apply_all_blocks()
+  if not state.output_buf then return end
+  local blocks = diff.find_all_blocks(state.output_buf)
+  if #blocks == 0 then
+    vim.notify("No code blocks in chat", vim.log.levels.WARN, { title = "ai-chat" })
+    return
+  end
+  state.diff_queue = blocks
+  local function next_one()
+    if not state.diff_queue or #state.diff_queue == 0 then
+      state.diff_queue = nil
+      return
+    end
+    local b = table.remove(state.diff_queue, 1)
+    diff.show_diff_for_block(b, state, next_one)
+  end
+  next_one()
+end
+
+function M.yank_block_at_cursor()
+  if not (state.output_buf and state.output_win and vim.api.nvim_win_is_valid(state.output_win)) then return end
+  local row = vim.api.nvim_win_get_cursor(state.output_win)[1]
+  local block = diff.find_block_at_cursor(state.output_buf, row)
+  if not block then
+    vim.notify("No code block at cursor", vim.log.levels.WARN, { title = "ai-chat" })
+    return
+  end
+  local body = table.concat(block.body_lines, "\n")
+  vim.fn.setreg("+", body)
+  vim.fn.setreg('"', body)
+  vim.notify("Yanked code block (" .. #block.body_lines .. " lines)", vim.log.levels.INFO, { title = "ai-chat" })
+end
+
+function M.jump_to_block(direction)
+  if not (state.output_buf and state.output_win and vim.api.nvim_win_is_valid(state.output_win)) then return end
+  local row = vim.api.nvim_win_get_cursor(state.output_win)[1]
+  local target = direction > 0
+    and diff.find_next_block(state.output_buf, row)
+    or diff.find_prev_block(state.output_buf, row)
+  if target then
+    vim.api.nvim_win_set_cursor(state.output_win, { target.start_line, 0 })
+  end
 end
 
 local function set_input_lines(text)

@@ -53,4 +53,10 @@ function M.pin(token)
   require("ai-chat.chat").pin(token)
 end
 
+function M.apply_block_at_cursor() require("ai-chat.chat").apply_block_at_cursor() end
+function M.apply_all_blocks()      require("ai-chat.chat").apply_all_blocks() end
+function M.yank_block_at_cursor()  require("ai-chat.chat").yank_block_at_cursor() end
+function M.next_block()            require("ai-chat.chat").jump_to_block(1) end
+function M.prev_block()            require("ai-chat.chat").jump_to_block(-1) end
+
 return M
