@@ -339,6 +339,28 @@ function M.send(opts)
     end)
   end
 
+  local done_completed = false
+  local pending_usage = nil
+
+  local function emit_usage(json)
+    local ok, usage = pcall(vim.json.decode, json)
+    if not ok or type(usage) ~= "table" then return end
+    local parts = {}
+    table.insert(parts, "input=" .. (usage.input_tokens or 0))
+    if usage.cache_read_input_tokens and usage.cache_read_input_tokens > 0 then
+      table.insert(parts, "cached_read=" .. usage.cache_read_input_tokens)
+    end
+    if usage.cache_creation_input_tokens and usage.cache_creation_input_tokens > 0 then
+      table.insert(parts, "cached_write=" .. usage.cache_creation_input_tokens)
+    end
+    table.insert(parts, "output=" .. (usage.output_tokens or 0))
+    local line = "--- usage: " .. table.concat(parts, " ") .. " ---"
+    if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
+      append_lines(state.output_buf, { line, "" })
+      scroll_to_bottom(state.output_win, state.output_buf)
+    end
+  end
+
   local function on_done()
     vim.schedule(function()
       if state.assistant_acc and #state.assistant_acc > 0 then
@@ -350,6 +372,11 @@ function M.send(opts)
       end
       state.job_id = nil
       state.assistant_acc = nil
+      done_completed = true
+      if pending_usage then
+        emit_usage(pending_usage)
+        pending_usage = nil
+      end
     end)
   end
 
@@ -365,6 +392,16 @@ function M.send(opts)
     end)
   end
 
+  local function on_usage(json)
+    vim.schedule(function()
+      if done_completed then
+        emit_usage(json)
+      else
+        pending_usage = json
+      end
+    end)
+  end
+
   state.job_id = job.start({
     deno_script = opts.deno_script,
     payload = {
@@ -376,6 +413,7 @@ function M.send(opts)
     on_text = on_text,
     on_done = on_done,
     on_error = on_error,
+    on_usage = on_usage,
   })
 end
 

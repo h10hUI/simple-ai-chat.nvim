@@ -45,8 +45,20 @@ function M.start(opts)
     end,
     on_stderr = function(_, data, _)
       if not data then return end
-      local msg = table.concat(data, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
-      if #msg > 0 then opts.on_error(msg) end
+      local raw = table.concat(data, "\n")
+      local errors = {}
+      for line in (raw .. "\n"):gmatch("([^\n]+)\n") do
+        local trimmed = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if #trimmed > 0 then
+          local usage_json = trimmed:match("^USAGE:(.+)$")
+          if usage_json then
+            if opts.on_usage then opts.on_usage(usage_json) end
+          else
+            table.insert(errors, trimmed)
+          end
+        end
+      end
+      if #errors > 0 then opts.on_error(table.concat(errors, "\n")) end
     end,
     on_exit = function(_, code, _)
       if code ~= 0 and not done_emitted then
