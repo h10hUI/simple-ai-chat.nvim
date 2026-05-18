@@ -197,10 +197,12 @@ function M.send(opts)
 
   vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
 
-  local user_lines = {}
+  local user_lines = { "**You**:", "" }
   for _, line in ipairs(vim.split(prompt, "\n", { plain = true })) do
-    table.insert(user_lines, "> " .. line)
+    table.insert(user_lines, line)
   end
+  table.insert(user_lines, "")
+  table.insert(user_lines, "**" .. opts.model .. "**:")
   table.insert(user_lines, "")
   append_lines(state.output_buf, user_lines)
   scroll_to_bottom(state.output_win, state.output_buf)

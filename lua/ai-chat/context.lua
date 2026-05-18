@@ -78,13 +78,7 @@ local function context_file(path)
   return fence(ft, expanded, table.concat(lines, "\n"))
 end
 
-local function context_diag(state)
-  local buf = origin_buf(state)
-  if not buf then return nil end
-  local diags = vim.diagnostic.get(buf)
-  if #diags == 0 then
-    return fence("diagnostics", buf_path(buf), "(no diagnostics)")
-  end
+local function format_native_diags(diags)
   local lines = {}
   for _, d in ipairs(diags) do
     table.insert(lines, string.format(
@@ -95,7 +89,54 @@ local function context_diag(state)
       d.message or ""
     ))
   end
-  return fence("diagnostics", buf_path(buf), table.concat(lines, "\n"))
+  return lines
+end
+
+local function get_coc_diags(buf)
+  if vim.fn.exists("*CocAction") == 0 then return nil end
+  local ok, list = pcall(vim.fn.CocAction, "diagnosticList")
+  if not ok or type(list) ~= "table" or #list == 0 then return nil end
+  local target = vim.api.nvim_buf_get_name(buf)
+  local target_real = vim.fn.resolve(target)
+  local filtered = {}
+  for _, d in ipairs(list) do
+    local p = d.file or ""
+    if p == target or vim.fn.resolve(p) == target_real then
+      table.insert(filtered, d)
+    end
+  end
+  return filtered
+end
+
+local function format_coc_diags(diags)
+  local lines = {}
+  for _, d in ipairs(diags) do
+    table.insert(lines, string.format(
+      "[%s] L%d:%d %s",
+      d.severity or "?",
+      d.lnum or 0,
+      d.col or 0,
+      d.message or ""
+    ))
+  end
+  return lines
+end
+
+local function context_diag(state)
+  local buf = origin_buf(state)
+  if not buf then return nil end
+
+  local native = vim.diagnostic.get(buf)
+  if #native > 0 then
+    return fence("diagnostics", buf_path(buf), table.concat(format_native_diags(native), "\n"))
+  end
+
+  local coc = get_coc_diags(buf)
+  if coc and #coc > 0 then
+    return fence("diagnostics", buf_path(buf), table.concat(format_coc_diags(coc), "\n"))
+  end
+
+  return fence("diagnostics", buf_path(buf), "(no diagnostics)")
 end
 
 local function extract_tokens(prompt)
