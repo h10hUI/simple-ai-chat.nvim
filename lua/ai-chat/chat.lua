@@ -21,11 +21,30 @@ local BASE_SYSTEM = [[
 - ファイル全文を書き換える必要がある場合のみ、SEARCH/REPLACE を使わずに通常のコードブロックでファイル全文を返してください。
 ]]
 
-local function build_system(user_system)
-  if user_system and user_system ~= "" then
-    return BASE_SYSTEM .. "\n\n" .. user_system
+local function read_claude_md()
+  local cwd = vim.fn.getcwd()
+  local candidates = { cwd .. "/CLAUDE.md", cwd .. "/.claude/CLAUDE.md" }
+  for _, path in ipairs(candidates) do
+    if vim.fn.filereadable(path) == 1 then
+      local ok, lines = pcall(vim.fn.readfile, path)
+      if ok and type(lines) == "table" and #lines > 0 then
+        return table.concat(lines, "\n"), path
+      end
+    end
   end
-  return BASE_SYSTEM
+  return nil, nil
+end
+
+local function build_system(user_system)
+  local parts = { BASE_SYSTEM }
+  local claude_md = read_claude_md()
+  if claude_md and claude_md ~= "" then
+    table.insert(parts, claude_md)
+  end
+  if user_system and user_system ~= "" then
+    table.insert(parts, user_system)
+  end
+  return table.concat(parts, "\n\n")
 end
 
 local state = {}
