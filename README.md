@@ -1,7 +1,8 @@
 # simple-ai-chat.nvim
 
 A minimal, zero-dependency AI chat plugin for Neovim that talks to the
-Anthropic Claude API. UI and keybindings are written in Lua. API communication
+Anthropic Claude API (and Anthropic-compatible endpoints such as DeepSeek). UI
+and keybindings are written in Lua. API communication
 is handled by a Deno script spawned per request via `jobstart()`. No Neovim
 plugin dependencies.
 
@@ -13,6 +14,8 @@ plugin dependencies.
 - Slash commands: `/clear`, `/quit`, `/pin`, `/unpin`, `/model`, `/system`
 - Diff-and-apply for AI-generated code blocks, with SEARCH/REPLACE patch format
 - LSP diagnostics integration (Neovim builtin LSP + coc.nvim)
+- Per-model provider routing: switch between Claude and Anthropic-compatible
+  endpoints (e.g. DeepSeek) with `/model`
 - Automatic `CLAUDE.md` / `.claude/CLAUDE.md` loading as system prompt
 - Visual selection via `<leader>ac` automatically populates `@sel`
 
@@ -21,6 +24,8 @@ plugin dependencies.
 - Neovim >= 0.9
 - [Deno](https://deno.com/) >= 1.40 on `PATH`
 - `ANTHROPIC_API_KEY` environment variable
+- API key environment variable for each additional provider (e.g.
+  `DEEPSEEK_API_KEY`), if used
 
 ## Installation
 
@@ -35,6 +40,14 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
       -- defaults shown; everything is optional
       model = "claude-sonnet-4-6",
       max_tokens = 8096,
+      -- Route models to other Anthropic-compatible endpoints (default: none)
+      providers = {
+        -- {
+        --   match = "^deepseek",
+        --   base_url = "https://api.deepseek.com/anthropic",
+        --   api_key_env = "DEEPSEEK_API_KEY",
+        -- },
+      },
       window = {
         width = 0.4,
         input_height = 5,
@@ -46,6 +59,55 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```
 
 On first run, the Deno script will fetch its npm dependencies automatically.
+
+### Providers
+
+Each `providers` entry has:
+
+| Field | Description |
+| --- | --- |
+| `match` | Lua pattern tested against the model name |
+| `base_url` | Anthropic-compatible endpoint URL |
+| `api_key_env` | Name of the environment variable holding the API key |
+
+Entries are evaluated in order and the first match wins. A model that matches
+no entry is sent to Anthropic (`api.anthropic.com`) as before. The model name
+is the one currently in effect, including changes made with `/model`.
+
+For a matching provider, the Deno process is started with `--allow-net` limited
+to the `base_url` host, and `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` are set
+for that process only. If `api_key_env` is unset or empty, the request is
+aborted with an error (your `ANTHROPIC_API_KEY` is never sent to the provider).
+
+Example with DeepSeek:
+
+```lua
+require("ai-chat").setup({
+  providers = {
+    {
+      match = "^deepseek",
+      base_url = "https://api.deepseek.com/anthropic",
+      api_key_env = "DEEPSEEK_API_KEY",
+    },
+  },
+})
+```
+
+```text
+/model deepseek-flash
+/model deepseek-v4-pro
+/model claude-sonnet-4-6   ← back to Anthropic
+```
+
+Notes:
+
+- Do not point `ANTHROPIC_BASE_URL` at a provider in your shell; it would also
+  redirect other tools such as Claude Code. Keep the endpoint in `providers`
+  and only export the provider's API key.
+- `/clear` resets the session model to the configured default, so the provider
+  follows the default model afterwards.
+- DeepSeek models may spend tokens on thinking before the answer, so a very
+  small `max_tokens` can yield an empty reply.
 
 ## Usage
 
@@ -172,13 +234,15 @@ Neovim (Lua)
           │ stdout: text deltas + "\n[DONE]\n"
           ▼
        Deno script         (deno/main.ts, deno/api.ts)
-          └── Anthropic API (@anthropic-ai/sdk) streaming
+          └── Anthropic API / compatible endpoint (@anthropic-ai/sdk) streaming
 ```
 
 The Deno process is spawned per request and exits when the stream finishes.
 All conversation state lives in Lua.
 
-See [doc/spec.md](doc/spec.md) for the full specification.
+See [doc/spec.md](doc/spec.md) for the full specification and
+[doc/deepseek-provider-spec.md](doc/deepseek-provider-spec.md) for the provider
+routing design.
 
 ## License
 
