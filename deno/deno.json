@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "run": "deno run --allow-net=api.anthropic.com --allow-env main.ts",
+    "run": "deno run --allow-net=api.anthropic.com,api.deepseek.com--allow-env main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",
     "test": "deno test --allow-env"

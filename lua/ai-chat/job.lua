@@ -18,13 +18,29 @@ function M.start(opts)
   local stdout_buf = ""
   local done_emitted = false
 
+  local host = "api.anthropic.com"
+  local env = nil
+  if opts.provider then
+    local key = vim.env[opts.provider.api_key_env]
+    if not key or key == "" then
+      opts.on_error(opts.provider.api_key_env .. " is not set")
+      return -1
+    end
+    host = opts.provider.base_url:match("^https?://([^/]+)")
+    env = {
+      ANTHROPIC_BASE_URL = opts.provider.base_url,
+      ANTHROPIC_API_KEY = key,
+    }
+  end
+
   local job_id = vim.fn.jobstart({
     "deno",
     "run",
-    "--allow-net=api.anthropic.com",
+    "--allow-net=" .. host,
     "--allow-env",
     opts.deno_script,
   }, {
+    env = env, -- 現在の環境変数にマージされる
     on_stdout = function(_, data, _)
       if not data or #data == 0 then return end
       stdout_buf = stdout_buf .. table.concat(data, "\n")
