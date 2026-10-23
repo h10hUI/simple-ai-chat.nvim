@@ -90,6 +90,40 @@ local function scroll_to_bottom(win, buf)
   pcall(vim.api.nvim_win_set_cursor, win, { line_count, 0 })
 end
 
+local SPINNER_FRAMES = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local spinner_ns = vim.api.nvim_create_namespace("ai-chat-spinner")
+
+local function spinner_stop()
+  local timer = state.spinner_timer
+  if timer then
+    state.spinner_timer = nil
+    timer:stop()
+    timer:close()
+  end
+  if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
+    vim.api.nvim_buf_clear_namespace(state.output_buf, spinner_ns, 0, -1)
+  end
+end
+
+local function spinner_start(label)
+  spinner_stop()
+  state.spinner_label = label
+  local timer = (vim.uv or vim.loop).new_timer()
+  state.spinner_timer = timer
+  local i = 0
+  timer:start(0, 100, vim.schedule_wrap(function()
+    local buf = state.output_buf
+    if state.spinner_timer ~= timer then return end
+    if not (buf and vim.api.nvim_buf_is_valid(buf)) then return end
+    i = i % #SPINNER_FRAMES + 1
+    vim.api.nvim_buf_clear_namespace(buf, spinner_ns, 0, -1)
+    local last = vim.api.nvim_buf_line_count(buf) - 1
+    vim.api.nvim_buf_set_extmark(buf, spinner_ns, last, 0, {
+      virt_lines = { { { SPINNER_FRAMES[i] .. " " .. state.spinner_label, "Comment" } } },
+    })
+  end))
+end
+
 local function is_open()
   return state.output_win and vim.api.nvim_win_is_valid(state.output_win)
     and state.input_win and vim.api.nvim_win_is_valid(state.input_win)
@@ -220,6 +254,7 @@ function M.open(opts)
 end
 
 function M.close()
+  spinner_stop()
   if state.job_id then
     job.stop(state.job_id)
     state.job_id = nil
@@ -274,6 +309,7 @@ function M.open_with_sel(opts, sel)
 end
 
 function M.stop_job()
+  spinner_stop()
   if state.job_id then
     job.stop(state.job_id)
     state.job_id = nil
@@ -332,6 +368,7 @@ function M.send(opts)
   table.insert(user_lines, "**" .. model .. "**:")
   table.insert(user_lines, "")
   output_append(user_lines)
+  spinner_start("応答待ち...")
 
   local user_content = context.build_user_content(effective_prompt, state)
   table.insert(state.messages, { role = "user", content = user_content })
@@ -340,6 +377,7 @@ function M.send(opts)
   local function on_text(text)
     vim.schedule(function()
       if not state.output_buf then return end
+      state.spinner_label = "生成中..."
       state.assistant_acc = (state.assistant_acc or "") .. text
       append_text(state.output_buf, text)
       scroll_to_bottom(state.output_win, state.output_buf)
@@ -370,6 +408,7 @@ function M.send(opts)
 
   local function on_done()
     vim.schedule(function()
+      spinner_stop()
       if state.assistant_acc and #state.assistant_acc > 0 then
         table.insert(state.messages, { role = "assistant", content = state.assistant_acc })
       end
@@ -389,6 +428,7 @@ function M.send(opts)
 
   local function on_error(msg)
     vim.schedule(function()
+      spinner_stop()
       if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
         append_lines(state.output_buf, { "", "[ERROR] " .. msg, "" })
         scroll_to_bottom(state.output_win, state.output_buf)
