@@ -4,6 +4,8 @@ local default_opts = {
   model = "claude-sonnet-4-6",
   max_tokens = 8096,
   deno_script = nil,
+  -- model 名が match にマッチしたら、その接続先を使う（どれにもマッチしなければ Anthropic）
+  providers = {},
   window = {
     width = 0.4,
     input_height = 5,

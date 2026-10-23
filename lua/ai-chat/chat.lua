@@ -21,6 +21,13 @@ local BASE_SYSTEM = [[
 - ファイル全文を書き換える必要がある場合のみ、SEARCH/REPLACE を使わずに通常のコードブロックでファイル全文を返してください。
 ]]
 
+local function resolve_provider(providers, model)
+  for _, p in ipairs(providers or {}) do
+    if model:match(p.match) then return p end
+  end
+  return nil
+end
+
 local function read_claude_md()
   local cwd = vim.fn.getcwd()
   local candidates = { cwd .. "/CLAUDE.md", cwd .. "/.claude/CLAUDE.md" }
@@ -404,6 +411,7 @@ function M.send(opts)
 
   state.job_id = job.start({
     deno_script = opts.deno_script,
+    provider = resolve_provider(opts.providers, model),
     payload = {
       model = model,
       system = build_system(state.system),
