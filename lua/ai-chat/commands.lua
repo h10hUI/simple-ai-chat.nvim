@@ -20,7 +20,9 @@ end
 
 function handlers.pin(state, args, _, ctx)
   for _, t in ipairs(args) do
-    if not contains(state.stickies, t) then
+    if t:find("^@cmd:") then
+      ctx.append_output_lines({ "", "[ERROR] @cmd cannot be pinned", "" })
+    elseif not contains(state.stickies, t) then
       table.insert(state.stickies, t)
     end
   end

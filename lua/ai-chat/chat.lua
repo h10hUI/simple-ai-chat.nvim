@@ -19,6 +19,12 @@ local BASE_SYSTEM = [[
 - SEARCH 部分はファイル内で一意に特定できる十分な context（前後数行）を含めてください。
 - 新規ファイル作成の場合は SEARCH を空にして REPLACE のみ書いてください。
 - ファイル全文を書き換える必要がある場合のみ、SEARCH/REPLACE を使わずに通常のコードブロックでファイル全文を返してください。
+
+コマンドの実行結果（git diff、テスト結果、ログなど）が回答に必要なときは、自分で実行しようとせず、ユーザーに実行を依頼してください。依頼するときは、次の形式でコマンドを示してください。
+
+  @cmd:`<command>`
+
+ユーザーがこれをプロンプトに含めて送信すると、実行結果があなたに渡されます。
 ]]
 
 local function resolve_provider(providers, model)
@@ -359,18 +365,25 @@ function M.send(opts)
 
   local model = state.session_model or opts.model
 
-  -- 出力 buf には原文を表示
+  local user_content, cmd_blocks = context.build_user_content(effective_prompt, state)
+
+  -- 出力 buf には原文と @cmd の出力を表示
   local user_lines = { "**You**:", "" }
   for _, line in ipairs(vim.split(prompt, "\n", { plain = true })) do
     table.insert(user_lines, line)
   end
   table.insert(user_lines, "")
+  for _, block in ipairs(cmd_blocks) do
+    for _, line in ipairs(vim.split(block, "\n", { plain = true })) do
+      table.insert(user_lines, line)
+    end
+    table.insert(user_lines, "")
+  end
   table.insert(user_lines, "**" .. model .. "**:")
   table.insert(user_lines, "")
   output_append(user_lines)
   spinner_start("応答待ち...")
 
-  local user_content = context.build_user_content(effective_prompt, state)
   table.insert(state.messages, { role = "user", content = user_content })
   state.assistant_acc = ""
 

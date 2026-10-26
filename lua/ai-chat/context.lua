@@ -78,6 +78,43 @@ local function context_file(path)
   return fence(ft, expanded, table.concat(lines, "\n"))
 end
 
+local CMD_TIMEOUT_MS = 10000
+local CMD_MAX_BYTES = 100000
+
+local function context_cmd(command)
+  local chunks = {}
+  local function collect(_, data)
+    if data then table.insert(chunks, table.concat(data, "\n")) end
+  end
+  local ok, job_id = pcall(vim.fn.jobstart, { "sh", "-c", command }, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = collect,
+    on_stderr = collect,
+  })
+  if not ok or job_id <= 0 then
+    return "[Error running command: " .. command .. "]"
+  end
+
+  local code = vim.fn.jobwait({ job_id }, CMD_TIMEOUT_MS)[1]
+  local notes = {}
+  if code == -1 then
+    vim.fn.jobstop(job_id)
+    table.insert(notes, "[timeout after " .. (CMD_TIMEOUT_MS / 1000) .. "s]")
+  elseif code ~= 0 then
+    table.insert(notes, "[exit code: " .. code .. "]")
+  end
+
+  local out = table.concat(chunks, "")
+  if #out > CMD_MAX_BYTES then
+    out = out:sub(1, CMD_MAX_BYTES)
+    table.insert(notes, 1, "[truncated]")
+  end
+  out = out:gsub("\n+$", "")
+  if #notes > 0 then out = out .. "\n" .. table.concat(notes, "\n") end
+  return fence("sh", command, out)
+end
+
 local function format_native_diags(diags)
   local lines = {}
   for _, d in ipairs(diags) do
@@ -142,6 +179,20 @@ end
 local function extract_tokens(prompt)
   local seen = {}
   local order = {}
+  for command in prompt:gmatch("@cmd:`([^`]+)`") do
+    local key = "@cmd:`" .. command .. "`"
+    if not seen[key] then
+      seen[key] = true
+      table.insert(order, { kind = "cmd", arg = command, key = key })
+    end
+  end
+  for word in prompt:gmatch("@cmd:([^%s`]%S*)") do
+    local key = "@cmd:" .. word
+    if not seen[key] then
+      seen[key] = true
+      table.insert(order, { kind = "cmd", arg = word, key = key })
+    end
+  end
   for path in prompt:gmatch("@file:(%S+)") do
     local key = "@file:" .. path
     if not seen[key] then
@@ -163,9 +214,10 @@ end
 
 function M.build_user_content(prompt, state)
   local tokens = extract_tokens(prompt)
-  if #tokens == 0 then return prompt end
+  if #tokens == 0 then return prompt, {} end
 
   local blocks = {}
+  local cmd_blocks = {}
   for _, t in ipairs(tokens) do
     local body
     if t.kind == "buf" then
@@ -178,14 +230,17 @@ function M.build_user_content(prompt, state)
       body = context_diag(state)
     elseif t.kind == "file" then
       body = context_file(t.arg)
+    elseif t.kind == "cmd" then
+      body = context_cmd(t.arg)
+      table.insert(cmd_blocks, body)
     end
     if body then
       table.insert(blocks, "<context " .. t.key .. ">\n" .. body)
     end
   end
 
-  if #blocks == 0 then return prompt end
-  return table.concat(blocks, "\n\n") .. "\n\n" .. prompt
+  if #blocks == 0 then return prompt, cmd_blocks end
+  return table.concat(blocks, "\n\n") .. "\n\n" .. prompt, cmd_blocks
 end
 
 function M.extract_token_keys(prompt)

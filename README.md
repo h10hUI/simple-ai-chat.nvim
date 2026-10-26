@@ -9,7 +9,7 @@ plugin dependencies.
 ## Features
 
 - Two-pane chat window (output + input) with streaming responses
-- Context tokens for injecting code into prompts: `@buf`, `@bufs`, `@sel`, `@file:<path>`, `@diag`
+- Context tokens for injecting code into prompts: `@buf`, `@bufs`, `@sel`, `@file:<path>`, `@diag`, `` @cmd:`<command>` ``
 - Sticky context pinned across the session (shown in the input pane's winbar)
 - Slash commands: `/clear`, `/quit`, `/pin`, `/unpin`, `/model`, `/system`
 - Diff-and-apply for AI-generated code blocks, with SEARCH/REPLACE patch format
@@ -155,12 +155,24 @@ message sent to Claude:
 | `@sel` | Last visual selection (auto-populated when chat is opened from visual mode) |
 | `@file:<path>` | Contents of the given file |
 | `@diag` | LSP diagnostics of the original buffer (Neovim builtin LSP + coc.nvim) |
+| `` @cmd:`<command>` `` | Output of an external command (run via `sh -c`, 10s timeout; not pinnable) |
 
 Example:
 
 ```
 @diag fix all the errors please
+@cmd:`git diff --staged` write a commit message for this
 ```
+
+`@cmd` runs the command with `sh -c` in Neovim's cwd when you send the prompt
+and attaches its stdout/stderr (a non-zero exit code is noted). The output is
+also shown in the output pane right after your prompt. It times out after 10
+seconds and is truncated at 100,000 bytes. Use backticks when the command
+contains spaces; a bare `@cmd:ls` also works. `@cmd` cannot be pinned, because
+pinned tokens would re-run on every send.
+
+The AI never runs commands itself. The built-in system prompt tells it to ask
+you to run `` @cmd:`...` `` when it needs command output.
 
 ### Sticky context
 
@@ -240,9 +252,10 @@ Neovim (Lua)
 The Deno process is spawned per request and exits when the stream finishes.
 All conversation state lives in Lua.
 
-See [doc/spec.md](doc/spec.md) for the full specification and
+See [doc/spec.md](doc/spec.md) for the full specification,
 [doc/deepseek-provider-spec.md](doc/deepseek-provider-spec.md) for the provider
-routing design.
+routing design, and [doc/cmd-context-spec.md](doc/cmd-context-spec.md) for the
+`@cmd` context token.
 
 ## License
 

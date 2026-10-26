@@ -126,6 +126,7 @@ deno/
 | `@sel` | 直前のビジュアル選択範囲 |
 | `@file:<path>` | 指定ファイルの内容 |
 | `@diag` | 現在のバッファの LSP diagnostics |
+| `` @cmd:`<command>` `` | 外部コマンドの実行結果（詳細は `doc/cmd-context-spec.md`。スティッキー非対応） |
 
 ### 例
 
