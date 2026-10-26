@@ -10,9 +10,11 @@ Neovim 上で動作する AI チャットプラグイン。**Lua（UI／Neovim �
 
 ## 現在のリポジトリ状態
 
-- 実装はまだ存在しない。トラックされているのは `doc/spec.md` のみ。
-- spec.md で計画されているディレクトリ構成は `plugin/ai-chat.lua` / `lua/ai-chat/*.lua` / `deno/{main,api}.ts`。
-- ビルド・テスト・リントのコマンドはまだ定義されていない。導入する際はこの CLAUDE.md にも追記すること。
+- `doc/spec.md` の Step 1〜5 はすべて実装済み。以降は個別の機能追加として、機能ごとの仕様ファイルを `doc/` に置く方式で進めている。
+  - `doc/deepseek-provider-spec.md`：モデル名に応じた接続先の切り替え（`providers`）。
+  - `doc/cmd-context-spec.md`：`@cmd` コンテキスト（外部コマンド出力の添付）。
+- ディレクトリ構成：`plugin/ai-chat.lua` / `lua/ai-chat/{init,chat,commands,context,diff,job}.lua` / `deno/{main,api}.ts`。
+- Deno 側のタスクは `deno/deno.json` に定義されている（`run` / `fmt` / `lint` / `test`）。Lua 側のテスト・リントは未導入。導入する際はこの CLAUDE.md にも追記すること。
 
 ## アーキテクチャの肝
 
@@ -21,20 +23,26 @@ Neovim 上で動作する AI チャットプラグイン。**Lua（UI／Neovim �
 - Deno → Lua：stdout にストリーミング delta をテキストで逐次書き出し、終端に `\n[DONE]\n` を出力。Lua 側はこの `[DONE]` を区切りとしてストリーム完了を判定する。
 - エラーは stderr へ。Lua 側 `on_stderr` でチャットウィンドウに表示する。
 - Anthropic SDK (`@anthropic-ai/sdk`) は Deno 側でのみ使う。Lua 側から HTTP を直接叩かない。
-- API キーは環境変数 `ANTHROPIC_API_KEY`（Deno プロセス側で読む）。
+- API キーは環境変数 `ANTHROPIC_API_KEY`（Deno プロセス側で読む）。`providers` にマッチしたモデル（例: DeepSeek）では、Lua 側が `api_key_env` の値を `ANTHROPIC_API_KEY` として Deno に渡し、`--allow-net` もその host に絞る。キー未設定時は Anthropic のキーにフォールバックせずエラーにする。
+- 外部コマンドの実行は Lua 側（`@cmd`）だけで行う。AI の応答に含まれるコマンドの自動実行（tool use）はしない。必要なときは AI がユーザーに `` @cmd:`...` `` の実行を依頼する（`BASE_SYSTEM` で指示）。
 
 ## 守るべき設計ルール
 
-- **コンテキストは `@` プレフィックスで明示指定する方式のみ**。自動挿入はしない。対応タイプは `@buf` / `@bufs` / `@sel` / `@file:<path>` / `@diag` の 5 種。新しいタイプを足す際は spec.md の表を更新する。
+- **コンテキストは `@` プレフィックスで明示指定する方式のみ**。自動挿入はしない。対応タイプは `@buf` / `@bufs` / `@sel` / `@file:<path>` / `@diag` / `` @cmd:`<command>` `` の 6 種。新しいタイプを足す際は spec.md の表を更新する。
+- `@cmd` はスティッキー非対応（送信のたびに再実行されるため）。出力はチャット出力ペインにも表示する。
 - スティッキーコンテキストは**セッションスコープ**（チャットを閉じたらリセット）。プロンプト送信時に先頭へ自動付与するが、ユーザーが本文中で明示指定したものと重複させない。
 - **差分適用のコードブロックヘッダは ` ```<lang>:<path> ` 形式**でファイルパスを指定する規約（例: ` ```lua:lua/ai-chat/chat.lua `）。ヘッダにパスが無い場合は、チャットを開く直前にフォーカスしていた編集バッファを対象とする。AI への指示プロンプトにもこの規約を含める想定。
 - チャット出力ペインは `filetype=ai-chat` / Markdown シンタックス / `nomodifiable`。出力は追記のみ。入力ペインは別バッファとして 2 ペイン構成。
 
 ## 実装の進め方
 
-`doc/spec.md` の「実装ステップ」に定義された **Step 1 → 5 の順**で進める。前ステップの完了条件を満たすまで次へ進まない。先回り実装はしないこと（例：Step 1 でスティッキー UI を作り込まない、Step 2 で差分適用ロジックを書き始めない）。
+基本ステップ（`doc/spec.md` の Step 1 → 5）は完了済み。新機能は次の手順で進める。
 
-各ステップで実装すべき範囲・完了条件は spec.md が正典。実装と spec.md にズレが生じたら spec.md を先に更新する。
+1. 機能ごとの仕様ファイルを `doc/` に作る（`doc/deepseek-provider-spec.md` と同じ形式：目的／変更不要な箇所／設計／実装／決定事項）。
+2. ユーザーが「実装して」と言うまで `lua/` や `deno/` は編集しない。仕様の合意が先。
+3. 実装後、`doc/spec.md`・`README.md`・この CLAUDE.md に影響する箇所を更新する。
+
+先回り実装はしないこと。実装と spec にズレが生じたら spec を先に更新する。
 
 ## 依存とスコープ
 
