@@ -40,21 +40,36 @@ local function context_buf(state)
   return fence(buf_lang(buf), buf_path(buf), get_buf_content(buf))
 end
 
-local function context_bufs()
+local function is_regular_buffer(buf)
+  return vim.api.nvim_buf_is_valid(buf)
+    and vim.bo[buf].buftype == ""
+    and vim.bo[buf].filetype ~= "ai-chat"
+    and vim.bo[buf].filetype ~= "ai-chat-input"
+end
+
+local function context_bufs(state)
   local blocks = {}
   local seen = {}
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local buf = vim.api.nvim_win_get_buf(win)
-    if vim.api.nvim_buf_is_valid(buf)
-      and not seen[buf]
-      and vim.bo[buf].buftype == ""
-      and vim.bo[buf].filetype ~= "ai-chat"
-      and vim.bo[buf].filetype ~= "ai-chat-input"
-    then
+
+  local function add(buf)
+    if buf and not seen[buf] and is_regular_buffer(buf) then
       seen[buf] = true
       table.insert(blocks, fence(buf_lang(buf), buf_path(buf), get_buf_content(buf)))
     end
   end
+
+  add(origin_buf(state))
+
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    add(vim.api.nvim_win_get_buf(win))
+  end
+
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted then
+      add(buf)
+    end
+  end
+
   if #blocks == 0 then return nil end
   return table.concat(blocks, "\n\n")
 end
@@ -223,7 +238,7 @@ function M.build_user_content(prompt, state)
     if t.kind == "buf" then
       body = context_buf(state)
     elseif t.kind == "bufs" then
-      body = context_bufs()
+      body = context_bufs(state)
     elseif t.kind == "sel" then
       body = context_sel(state)
     elseif t.kind == "diag" then
