@@ -151,7 +151,7 @@ message sent to Claude:
 | Token | Content |
 | --- | --- |
 | `@buf` | The buffer focused before opening chat |
-| `@bufs` | All visible regular buffers |
+| `@bufs` | All loaded regular buffers (visible or hidden) |
 | `@sel` | Last visual selection (auto-populated when chat is opened from visual mode) |
 | `@file:<path>` | Contents of the given file |
 | `@diag` | LSP diagnostics of the original buffer (Neovim builtin LSP + coc.nvim) |
