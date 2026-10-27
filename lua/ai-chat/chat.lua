@@ -219,6 +219,7 @@ local function setup_input_keymaps(buf)
   end, "ai-chat: send")
   bufmap(buf, { "n", "i" }, "<C-c>", function() M.stop_job() end, "ai-chat: stop streaming")
   bufmap(buf, "n", "<Esc>", focus_output, "ai-chat: focus output")
+  bufmap(buf, "n", "<C-j>", focus_output, "ai-chat: focus output")
   bufmap(buf, "n", "<Up>", function() M.history_prev() end, "ai-chat: history prev")
   bufmap(buf, "n", "<Down>", function() M.history_next() end, "ai-chat: history next")
 end
