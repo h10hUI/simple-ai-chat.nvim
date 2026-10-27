@@ -71,8 +71,18 @@ local function context_bufs(state)
   end
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buflisted then
-      add(buf)
+    if vim.bo[buf].buflisted then
+      if vim.api.nvim_buf_is_loaded(buf) then
+        add(buf)
+      elseif not seen[buf] and is_regular_buffer(buf) then
+        -- 未ロードの listed バッファ（セッション復元・:badd 等）はバッファ内容が空なのでディスクから読む
+        local path = vim.api.nvim_buf_get_name(buf)
+        if path ~= "" and vim.fn.filereadable(path) == 1 then
+          seen[buf] = true
+          local ft = vim.filetype.match({ filename = path }) or ""
+          table.insert(blocks, fence(ft, path, table.concat(vim.fn.readfile(path), "\n")))
+        end
+      end
     end
   end
 
