@@ -18,7 +18,7 @@ plugin dependencies.
 - LSP diagnostics integration (Neovim builtin LSP + coc.nvim)
 - Per-model provider routing: switch between Claude and Anthropic-compatible
   endpoints (e.g. DeepSeek) with `/model`
-- Automatic `CLAUDE.md` / `.claude/CLAUDE.md` loading as system prompt
+- Automatic `~/.claude/CLAUDE.md` / `CLAUDE.md` / `.claude/CLAUDE.md` loading (with `@import` expansion) as system prompt
 - Visual selection via `<leader>ac` automatically populates `@sel`
 
 ## Requirements
@@ -281,9 +281,19 @@ parent directories) is created on apply.
 
 ### CLAUDE.md auto-loading
 
-If `CLAUDE.md` or `.claude/CLAUDE.md` exists in the cwd, its contents are
-automatically appended to the system prompt on each send, before any
-`/system` text. This follows the convention used by Claude Code.
+On each send, the following are appended to the system prompt (before any
+`/system` text):
+
+1. `~/.claude/CLAUDE.md` (user-global)
+2. `<cwd>/CLAUDE.md`, or `<cwd>/.claude/CLAUDE.md` if the former is absent
+
+Parent-directory CLAUDE.md files are not loaded. `@path` imports inside
+CLAUDE.md are expanded recursively (max depth 5): paths are relative to the
+importing file, `~/` and absolute paths work, and `@...` inside code spans /
+fenced blocks is left alone. Missing files and circular imports are left as-is.
+Other files under `.claude/` are only loaded when imported this way.
+
+This follows the convention used by Claude Code.
 
 ## Architecture
 
@@ -292,6 +302,7 @@ Neovim (Lua)
   │
   ├── UI & keymaps         (lua/ai-chat/chat.lua, plugin/ai-chat.lua)
   ├── Context expansion    (lua/ai-chat/context.lua)
+  ├── CLAUDE.md loading    (lua/ai-chat/claude_md.lua)
   ├── Slash commands       (lua/ai-chat/commands.lua)
   ├── Workflows            (lua/ai-chat/workflow.lua)
   ├── Diff & apply         (lua/ai-chat/diff.lua)

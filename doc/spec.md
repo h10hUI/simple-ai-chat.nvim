@@ -36,6 +36,7 @@ lua/
   ai-chat/
     init.lua           # setup()
     chat.lua           # チャットウィンドウ管理
+    claude_md.lua      # CLAUDE.md の読み込みと @import 展開
     diff.lua           # 差分適用ロジック
     context.lua        # コンテキスト収集
     job.lua            # Deno プロセス管理
@@ -237,12 +238,12 @@ SEARCH 文字列がファイル内に見つからない場合は通知してタ�
 
 ### プロジェクト指示の自動読み込み（CLAUDE.md）
 
-送信時、Neovim の cwd 配下に以下のファイルがあれば自動で内容を読み込み、system プロンプトに連結する：
+送信時、以下のファイルがあれば自動で内容を読み込み、system プロンプトに連結する（詳細は `doc/claude-md-import-spec.md`）：
 
-1. `<cwd>/CLAUDE.md`
-2. `<cwd>/.claude/CLAUDE.md`
+1. `~/.claude/CLAUDE.md`（ユーザーグローバル）
+2. `<cwd>/CLAUDE.md`、なければ `<cwd>/.claude/CLAUDE.md`（最初に見つかった 1 つ）
 
-最初に見つかった 1 つを使用する。`CLAUDE.md` は Claude Code（claude.ai/code）のプロジェクト指示ファイルとして広く使われる慣習に従う。送信ごとに読み直すので、編集後は次の送信から即反映される。
+親ディレクトリの CLAUDE.md は読まない。CLAUDE.md 内の `@path` は再帰的（最大深さ 5）に展開される。`.claude/**` のその他のファイルは `@import` で参照されたときのみ読み込む。`CLAUDE.md` は Claude Code（claude.ai/code）のプロジェクト指示ファイルとして広く使われる慣習に従う。送信ごとに読み直すので、編集後は次の送信から即反映される。
 
 最終的な system プロンプトの構造：
 

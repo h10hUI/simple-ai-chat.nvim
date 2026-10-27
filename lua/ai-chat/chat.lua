@@ -4,6 +4,7 @@ local context = require("ai-chat.context")
 local commands = require("ai-chat.commands")
 local diff = require("ai-chat.diff")
 local workflow = require("ai-chat.workflow")
+local claude_md_loader = require("ai-chat.claude_md")
 
 local BASE_SYSTEM = [[
 ファイルを修正するときは、必ず次の SEARCH/REPLACE 形式のコードブロックで変更部分のみを返してください。ファイル全文を返す必要はありません。
@@ -35,24 +36,10 @@ local function resolve_provider(providers, model)
   return nil
 end
 
-local function read_claude_md()
-  local cwd = vim.fn.getcwd()
-  local candidates = { cwd .. "/CLAUDE.md", cwd .. "/.claude/CLAUDE.md" }
-  for _, path in ipairs(candidates) do
-    if vim.fn.filereadable(path) == 1 then
-      local ok, lines = pcall(vim.fn.readfile, path)
-      if ok and type(lines) == "table" and #lines > 0 then
-        return table.concat(lines, "\n"), path
-      end
-    end
-  end
-  return nil, nil
-end
-
 -- BASE_SYSTEM + CLAUDE.md + persona + /system + notice の順に連結する（persona / notice は workflow 用）
 local function build_system(user_system, persona, notice)
   local parts = { BASE_SYSTEM }
-  local claude_md = read_claude_md()
+  local claude_md = claude_md_loader.read(vim.fn.getcwd())
   if claude_md and claude_md ~= "" then
     table.insert(parts, claude_md)
   end

@@ -56,19 +56,20 @@ CLAUDE.md の本文中の `@<path>` を、そのファイルの内容で置き�
 
 ## 実装
 
+### `lua/ai-chat/claude_md.lua`（新規）
+
+- `expand_imports(text, dir, stack, depth)`：上記規則で `@path` を展開する。純関数（ファイル読み込みのみ）。深さは「インポートの入れ子」の数で、最上位ファイルが 0、`depth >= 5` のファイル内の `@path` は展開しない。
+- `read(cwd)`：ユーザーグローバル → プロジェクトの順に読み、各ファイルを展開して `\n\n` で連結して返す（無ければ `nil`）。`$HOME` は `vim.env.HOME`。
+
 ### `lua/ai-chat/chat.lua`
 
-- `read_claude_md()` を置き換える。
-  - `expand_imports(text, dir, stack, depth)`：上記規則で `@path` を展開する。
-  - `read_file(path)`：`filereadable` + `readfile` + `pcall`。失敗時は `nil`。
-  - `read_claude_md()`：ユーザーグローバル → プロジェクトの順に読み、各ファイルを `expand_imports` に通して `\n\n` で連結して返す。
-- `build_system` は `read_claude_md()` の戻り値を使う形のまま変更しない（戻り値の 2 つ目 `path` は未使用なら削除）。
+- 旧 `read_claude_md()` を削除し、`build_system` は `require("ai-chat.claude_md").read(cwd)` を使う。
 
 ### テスト
 
 - `test/lua/` に `claude_md_test.lua` を追加する（`nvim --headless -u NONE -l test/lua/run.lua`）。
   - 相対 / `~/` / 絶対パスの解決、コードスパン・コードブロック内の非展開、深さ制限、循環参照、存在しないファイル、末尾句読点。
-- テストしやすいよう、`expand_imports` は純関数として切り出す（`HOME` は `vim.env.HOME` 経由で差し替え可能にする）。
+- テストしやすいよう、`HOME` は `vim.env.HOME` を差し替えてテストする。
 
 ### ドキュメント
 
