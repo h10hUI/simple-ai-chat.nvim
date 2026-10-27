@@ -13,8 +13,9 @@ Neovim 上で動作する AI チャットプラグイン。**Lua（UI／Neovim �
 - `doc/spec.md` の Step 1〜5 はすべて実装済み。以降は個別の機能追加として、機能ごとの仕様ファイルを `doc/` に置く方式で進めている。
   - `doc/deepseek-provider-spec.md`：モデル名に応じた接続先の切り替え（`providers`）。
   - `doc/cmd-context-spec.md`：`@cmd` コンテキスト（外部コマンド出力の添付）。
+  - `doc/claude-md-import-spec.md`：CLAUDE.md の `@import` 展開と `~/.claude/CLAUDE.md` の読み込み。
   - `doc/workflow-spec.md`：`/workflow`（複数ペルソナによる plan → implement → review → fix のループ実行）。
-- ディレクトリ構成：`plugin/ai-chat.lua` / `lua/ai-chat/{init,chat,commands,context,diff,job,workflow}.lua` / `deno/{main,api}.ts`。
+- ディレクトリ構成：`plugin/ai-chat.lua` / `lua/ai-chat/{init,chat,claude_md,commands,context,diff,job,workflow}.lua` / `deno/{main,api}.ts`。
 - Deno 側のタスクは `deno/deno.json` に定義されている（`run` / `fmt` / `lint` / `test`）。Lua 側のテストは `test/lua/` の自前ランナーで実行する（リポジトリルートで `nvim --headless -u NONE -l test/lua/run.lua`。テストは `test/lua/*_test.lua`、外部プラグイン依存なし）。Lua 側のリントは未導入。導入する際はこの CLAUDE.md にも追記すること。
 
 ## アーキテクチャの肝
