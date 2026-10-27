@@ -22,7 +22,13 @@ local function fence(lang, header, body)
   if header and header ~= "" then
     info = info .. ":" .. header
   end
-  return "```" .. info .. "\n" .. body .. "\n```"
+  -- 本文中の最長バッククォート列より長いフェンスを使い、入れ子（md ファイル等）で壊れないようにする
+  local longest = 0
+  for run in body:gmatch("`+") do
+    longest = math.max(longest, #run)
+  end
+  local ticks = string.rep("`", math.max(3, longest + 1))
+  return ticks .. info .. "\n" .. body .. "\n" .. ticks
 end
 
 local function origin_buf(state)

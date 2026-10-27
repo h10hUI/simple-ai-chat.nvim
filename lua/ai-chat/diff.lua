@@ -13,11 +13,13 @@ function M.find_all_blocks(buf, start_line)
   local blocks = {}
   local in_block = false
   local current
+  local open_len = 0
   for i, line in ipairs(lines) do
-    local fence = line:match("^```(.*)$")
-    if fence ~= nil then
-      if not in_block then
-        local lang, path = parse_header(fence)
+    if not in_block then
+      -- 開きフェンス：3 個以上のバッククォート（CommonMark 同様、長いフェンスで入れ子を表現できる）
+      local ticks, info = line:match("^(`+)(.*)$")
+      if ticks and #ticks >= 3 then
+        local lang, path = parse_header(info)
         current = {
           start_line = i,
           lang = lang,
@@ -25,16 +27,21 @@ function M.find_all_blocks(buf, start_line)
           body_lines = {},
         }
         in_block = true
-      else
+        open_len = #ticks
+      end
+    else
+      -- 閉じフェンス：開きフェンス以上の長さのバッククォートのみの行
+      local ticks = line:match("^(`+)%s*$")
+      if ticks and #ticks >= open_len then
         current.end_line = i
         if not start_line or current.start_line >= start_line then
           table.insert(blocks, current)
         end
         current = nil
         in_block = false
+      else
+        table.insert(current.body_lines, line)
       end
-    elseif in_block then
-      table.insert(current.body_lines, line)
     end
   end
   return blocks
