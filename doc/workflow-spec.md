@@ -238,10 +238,11 @@ workflows = {
 | --- | --- | --- | --- | --- |
 | plan | 設計担当。実装はしない | `{task}` から変更方針と対象ファイルを箇条書きで出す | セッションのモデル | → implement |
 | implement | 実装担当 | `{previous_response}`（plan の出力）の計画に従い、SEARCH/REPLACE 形式で変更を出す | セッションのモデル | → review |
-| review | レビュー担当。問題点の指摘のみ（コードブロックは使わない） | `{task}` と `{last_edit}` の実装をレビュー。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
+| review | レビュー担当。問題点の指摘のみ（コードブロックは使わない） | `{task}` と `{last_edit}` の実装をレビュー。`TODO:` コメントは未決定部分の意図的な印として許容（指摘しない）。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
 | fix | 修正担当 | `{last_edit}`（前回の実装）と `{previous_response}`（レビューの指摘）から、元のファイルに対する変更全体を SEARCH/REPLACE 形式で出し直す | セッションのモデル | → review |
 
 - implement / fix は `edits = true`。
+- 「未決定部分は `TODO:` コメントで残す」という指示は developer（implement / fix）側の persona には入れず、ユーザーがタスク入力時に書く。review はコード中の `TODO:` コメントを未完成として REJECT しない。
 - 変更は workflow 中に適用されない（元のファイルのまま）ため、fix は前回の実装との差分ではなく、元のファイルに対する変更全体を出し直す。そのために fix には `{last_edit}` を渡す。
 - plan の出力は implement にだけ渡る（review には `{task}` と実装を渡す）。
 - ビルトインではモデルを固定しない（利用者の `providers` / モデル設定に依存させないため）。モデルを分けたい場合はユーザーが `workflows.default` を上書きする。
