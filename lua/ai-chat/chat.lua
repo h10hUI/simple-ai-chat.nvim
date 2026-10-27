@@ -3,6 +3,7 @@ local job = require("ai-chat.job")
 local context = require("ai-chat.context")
 local commands = require("ai-chat.commands")
 local diff = require("ai-chat.diff")
+local workflow = require("ai-chat.workflow")
 
 local BASE_SYSTEM = [[
 ファイルを修正するときは、必ず次の SEARCH/REPLACE 形式のコードブロックで変更部分のみを返してください。ファイル全文を返す必要はありません。
@@ -48,14 +49,21 @@ local function read_claude_md()
   return nil, nil
 end
 
-local function build_system(user_system)
+-- BASE_SYSTEM + CLAUDE.md + persona + /system + notice の順に連結する（persona / notice は workflow 用）
+local function build_system(user_system, persona, notice)
   local parts = { BASE_SYSTEM }
   local claude_md = read_claude_md()
   if claude_md and claude_md ~= "" then
     table.insert(parts, claude_md)
   end
+  if persona and persona ~= "" then
+    table.insert(parts, persona)
+  end
   if user_system and user_system ~= "" then
     table.insert(parts, user_system)
+  end
+  if notice and notice ~= "" then
+    table.insert(parts, notice)
   end
   return table.concat(parts, "\n\n")
 end
@@ -166,11 +174,12 @@ local function output_append(lines)
   scroll_to_bottom(state.output_win, state.output_buf)
 end
 
-local function build_cmd_ctx()
+local function build_cmd_ctx(opts)
   return {
     append_output_lines = output_append,
     update_winbar = update_winbar,
     close = function() M.close() end,
+    run_workflow = function(full_rest) M.run_workflow(opts, full_rest) end,
   }
 end
 
@@ -316,6 +325,7 @@ end
 
 function M.stop_job()
   spinner_stop()
+  if state.workflow then state.workflow.cancelled = true end
   if state.job_id then
     job.stop(state.job_id)
     state.job_id = nil
@@ -331,66 +341,48 @@ function M.pin(token)
   update_winbar()
 end
 
-function M.send(opts)
-  if state.job_id then return end
-  if not is_open() then return end
-
-  local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
-  local prompt = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
-  if #prompt == 0 then return end
-
-  -- 入力 buf をクリア（コマンド処理で state がリセットされる前に先に行う）
-  vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
-
-  -- スラッシュコマンド
-  if commands.handle(prompt, state, build_cmd_ctx()) then
-    return
+-- スティッキーを先頭に付与したプロンプトを返す（本文に既出のものは除外）
+local function apply_stickies(prompt)
+  if not state.stickies or #state.stickies == 0 then return prompt end
+  local in_prompt = context.extract_token_keys(prompt)
+  local additions = {}
+  for _, t in ipairs(state.stickies) do
+    if not in_prompt[t] then table.insert(additions, t) end
   end
+  if #additions == 0 then return prompt end
+  return table.concat(additions, " ") .. " " .. prompt
+end
 
-  table.insert(state.prompt_history, prompt)
-  state.history_index = nil
-
-  -- スティッキー prepend（本文に既出のものは除外）
-  local effective_prompt = prompt
-  if state.stickies and #state.stickies > 0 then
-    local in_prompt = context.extract_token_keys(prompt)
-    local additions = {}
-    for _, t in ipairs(state.stickies) do
-      if not in_prompt[t] then table.insert(additions, t) end
-    end
-    if #additions > 0 then
-      effective_prompt = table.concat(additions, " ") .. " " .. prompt
-    end
-  end
-
-  local model = state.session_model or opts.model
-
-  local user_content, cmd_blocks = context.build_user_content(effective_prompt, state)
-
-  -- 出力 buf には原文と @cmd の出力を表示
-  local user_lines = { "**You**:", "" }
+-- 出力 buf に表示するユーザー発言（原文と @cmd の出力）
+local function user_lines(prompt, cmd_blocks)
+  local lines = { "**You**:", "" }
   for _, line in ipairs(vim.split(prompt, "\n", { plain = true })) do
-    table.insert(user_lines, line)
+    table.insert(lines, line)
   end
-  table.insert(user_lines, "")
+  table.insert(lines, "")
   for _, block in ipairs(cmd_blocks) do
     for _, line in ipairs(vim.split(block, "\n", { plain = true })) do
-      table.insert(user_lines, line)
+      table.insert(lines, line)
     end
-    table.insert(user_lines, "")
+    table.insert(lines, "")
   end
-  table.insert(user_lines, "**" .. model .. "**:")
-  table.insert(user_lines, "")
-  output_append(user_lines)
-  spinner_start("応答待ち...")
+  return lines
+end
 
-  table.insert(state.messages, { role = "user", content = user_content })
+-- 1 回のリクエストを実行し、応答を出力 buf にストリーミング表示する。
+-- req: { model, system, messages, label_prefix }
+-- cb:  on_done(text)      ストリーム完了時（usage 表示より前に呼ばれうる）
+--      on_complete(text)  Deno プロセスの正常終了後（usage 表示まで済んだ後）
+--      on_error(msg)
+local function run_request(opts, req, cb)
+  local prefix = req.label_prefix or ""
+  spinner_start(prefix .. "応答待ち...")
   state.assistant_acc = ""
 
   local function on_text(text)
     vim.schedule(function()
       if not state.output_buf then return end
-      state.spinner_label = "生成中..."
+      state.spinner_label = prefix .. "生成中..."
       state.assistant_acc = (state.assistant_acc or "") .. text
       append_text(state.output_buf, text)
       scroll_to_bottom(state.output_win, state.output_buf)
@@ -398,6 +390,7 @@ function M.send(opts)
   end
 
   local done_completed = false
+  local final_text = ""
   local pending_usage = nil
 
   local function emit_usage(json)
@@ -422,9 +415,8 @@ function M.send(opts)
   local function on_done()
     vim.schedule(function()
       spinner_stop()
-      if state.assistant_acc and #state.assistant_acc > 0 then
-        table.insert(state.messages, { role = "assistant", content = state.assistant_acc })
-      end
+      final_text = state.assistant_acc or ""
+      if cb.on_done then cb.on_done(final_text) end
       if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
         append_lines(state.output_buf, { "", "" })
         scroll_to_bottom(state.output_win, state.output_buf)
@@ -442,13 +434,18 @@ function M.send(opts)
   local function on_error(msg)
     vim.schedule(function()
       spinner_stop()
-      if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
-        append_lines(state.output_buf, { "", "[ERROR] " .. msg, "" })
-        scroll_to_bottom(state.output_win, state.output_buf)
+      -- ユーザーによる workflow 中断は、エラー表示なしで呼び出し側に伝える
+      local cancelled = state.workflow and state.workflow.cancelled
+      if not cancelled then
+        if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
+          append_lines(state.output_buf, { "", "[ERROR] " .. msg, "" })
+          scroll_to_bottom(state.output_win, state.output_buf)
+        end
+        vim.notify(msg, vim.log.levels.ERROR, { title = "ai-chat" })
       end
-      vim.notify(msg, vim.log.levels.ERROR, { title = "ai-chat" })
       state.job_id = nil
       state.assistant_acc = nil
+      if cb.on_error then cb.on_error(msg) end
     end)
   end
 
@@ -462,19 +459,133 @@ function M.send(opts)
     end)
   end
 
+  local function on_exit(code)
+    vim.schedule(function()
+      if code == 0 and done_completed and cb.on_complete then
+        cb.on_complete(final_text)
+      end
+    end)
+  end
+
   state.job_id = job.start({
     deno_script = opts.deno_script,
-    provider = resolve_provider(opts.providers, model),
+    provider = resolve_provider(opts.providers, req.model),
     payload = {
-      model = model,
-      system = build_system(state.system),
-      messages = vim.deepcopy(state.messages),
+      model = req.model,
+      system = req.system,
+      messages = vim.deepcopy(req.messages),
       max_tokens = opts.max_tokens,
     },
     on_text = on_text,
     on_done = on_done,
     on_error = on_error,
     on_usage = on_usage,
+    on_exit = on_exit,
+  })
+end
+
+function M.send(opts)
+  if state.job_id or state.workflow then return end
+  if not is_open() then return end
+
+  local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+  local prompt = table.concat(lines, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
+  if #prompt == 0 then return end
+
+  -- 入力 buf をクリア（コマンド処理で state がリセットされる前に先に行う）
+  vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
+
+  -- スラッシュコマンド
+  if commands.handle(prompt, state, build_cmd_ctx(opts)) then
+    return
+  end
+
+  table.insert(state.prompt_history, prompt)
+  state.history_index = nil
+  state.workflow_edit_start = nil
+
+  local effective_prompt = apply_stickies(prompt)
+  local model = state.session_model or opts.model
+  local user_content, cmd_blocks = context.build_user_content(effective_prompt, state)
+
+  local out = user_lines(prompt, cmd_blocks)
+  table.insert(out, "**" .. model .. "**:")
+  table.insert(out, "")
+  output_append(out)
+
+  table.insert(state.messages, { role = "user", content = user_content })
+
+  run_request(opts, {
+    model = model,
+    system = build_system(state.system),
+    messages = state.messages,
+  }, {
+    on_done = function(text)
+      if #text > 0 then
+        table.insert(state.messages, { role = "assistant", content = text })
+      end
+    end,
+  })
+end
+
+-- /workflow の実行。full_rest はコマンド名以降の全文（複数行を含む）。
+function M.run_workflow(opts, full_rest)
+  local map, load_err = workflow.resolve(opts)
+  if load_err then
+    output_append({ "", "[ERROR] .ai-chat/workflows.lua: " .. load_err, "" })
+  end
+
+  local name, task = workflow.parse_args(full_rest, map)
+  if not name then
+    output_append(workflow.list_lines(map))
+    return
+  end
+  if task == "" then
+    output_append({ "", "[ERROR] /workflow requires a task", "" })
+    return
+  end
+
+  local def = map[name].def
+  local verr = workflow.validate(def)
+  if verr then
+    output_append({ "", "[ERROR] workflow '" .. name .. "': " .. verr, "" })
+    return
+  end
+
+  -- @ コンテキスト（@cmd を含む）とスティッキーは開始時に 1 回だけ展開する
+  local task_content, cmd_blocks = context.build_user_content(apply_stickies(task), state)
+  output_append(user_lines(task, cmd_blocks))
+
+  local run = { cancelled = false }
+  state.workflow = run
+  state.workflow_edit_start = nil
+  local session_model = state.session_model or opts.model
+
+  workflow.run(def, name, task_content, {
+    model_for = function(step)
+      return step.model or session_model
+    end,
+    request = function(step, user_text, cb)
+      if state.workflow ~= run then return end
+      run_request(opts, {
+        model = step.model or session_model,
+        system = build_system(state.system, step.persona, workflow.NOTICE),
+        messages = { { role = "user", content = user_text } },
+        label_prefix = step.name .. ": ",
+      }, cb)
+    end,
+    print = output_append,
+    mark_edit_start = function()
+      if state.output_buf and vim.api.nvim_buf_is_valid(state.output_buf) then
+        state.workflow_edit_start = vim.api.nvim_buf_line_count(state.output_buf)
+      end
+    end,
+    is_cancelled = function()
+      return run.cancelled
+    end,
+    on_end = function()
+      if state.workflow == run then state.workflow = nil end
+    end,
   })
 end
 
@@ -491,7 +602,7 @@ end
 
 function M.apply_all_blocks()
   if not state.output_buf then return end
-  local blocks = diff.find_all_blocks(state.output_buf)
+  local blocks = diff.find_all_blocks(state.output_buf, state.workflow_edit_start)
   if #blocks == 0 then
     vim.notify("No code blocks in chat", vim.log.levels.WARN, { title = "ai-chat" })
     return

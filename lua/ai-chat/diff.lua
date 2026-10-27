@@ -7,7 +7,8 @@ local function parse_header(info)
   return info, nil
 end
 
-function M.find_all_blocks(buf)
+-- start_line を渡すと、その行以降に始まるブロックだけを返す
+function M.find_all_blocks(buf, start_line)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local blocks = {}
   local in_block = false
@@ -26,7 +27,9 @@ function M.find_all_blocks(buf)
         in_block = true
       else
         current.end_line = i
-        table.insert(blocks, current)
+        if not start_line or current.start_line >= start_line then
+          table.insert(blocks, current)
+        end
         current = nil
         in_block = false
       end

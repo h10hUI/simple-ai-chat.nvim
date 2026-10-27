@@ -9,8 +9,8 @@ Issue: [#9](https://github.com/h10hUI/simple-ai-chat.nvim/issues/9)
 ## 変更不要な箇所
 
 - `deno/main.ts` / `deno/api.ts`：1 リクエスト = 1 回の Deno 起動のまま。workflow は Lua 側が Deno を複数回起動して実現する。プロトコル（stdin JSON / stdout delta + `[DONE]` / stderr）も変えない。
-- `lua/ai-chat/job.lua`：`providers` による接続先切り替えも含め、そのまま使う。
-- `lua/ai-chat/diff.lua`：差分適用（`ga` / `gA`）はユーザー確認つきのまま。workflow がファイルを直接書き換えることはしない。
+- `lua/ai-chat/job.lua`：`providers` による接続先切り替えも含め、そのまま使う。ただし Deno プロセスの終了を呼び出し側に通知する `on_exit` コールバック（任意）だけ追加する（usage の表示まで済んだ後で次の step に進むため）。
+- `lua/ai-chat/diff.lua`：差分適用（`ga` / `gA`）はユーザー確認つきのまま。workflow がファイルを直接書き換えることはしない。`find_all_blocks` に開始行の引数を足すだけ（後述）。
 - `@cmd` の実行は Lua 側のみ。AI の応答に含まれるコマンドの自動実行はしない。
 
 ## 設計
@@ -113,6 +113,7 @@ workflows = {
 | --- | --- |
 | `{task}` | `/workflow` に渡されたタスク本文（`@` コンテキスト展開済み） |
 | `{previous_response}` | 直前の step の出力全文（マーカー行を除く） |
+| `{last_edit}` | 直近の `edits = true` の step の出力全文（マーカー行を除く）。まだ実行されていなければ空文字 |
 | `{iteration}` | 現在までに実行した step 数（1 始まり） |
 
 未知の変数はそのまま残す（エラーにしない）。
@@ -133,7 +134,7 @@ workflows = {
 
 ### 実行モデル
 
-- 各 step は**独立したリクエスト**。`messages` は `instruction` 展開後の user 1 件のみで、チャットの `state.messages` は参照も更新もしない。step 間の受け渡しは `{task}` と `{previous_response}` だけ。
+- 各 step は**独立したリクエスト**。`messages` は `instruction` 展開後の user 1 件のみで、チャットの `state.messages` は参照も更新もしない。step 間の受け渡しは `{task}` / `{previous_response}` / `{last_edit}` だけ。
 - `system` は `BASE_SYSTEM` + `CLAUDE.md` + step の `persona`（+ `/system` で設定されたテキスト）+ workflow 共通の注意書き。
 - workflow 共通の注意書き：`BASE_SYSTEM` は情報不足のときにユーザーへ `` @cmd:`...` `` の実行を依頼するよう AI に指示しているが、workflow の途中ではそれを受け取る人がいない。そこで各 step の `system` の末尾に「この workflow 中はコマンドを実行できず、実行の依頼もしない。与えられた情報だけで判断し、足りない情報があれば出力にその旨を明記する」という指示を自動で追加する。必要なコマンド出力は、ユーザーが task に `@cmd` で先に含めておく。
 - `@` コンテキスト（`@buf` / `@file` / `@cmd` など）は `/workflow` 実行時に**1 回だけ**展開して `{task}` に埋め込む。`@cmd` が step ごとに再実行されることはない。スティッキーも開始時に 1 回だけ付与する。
@@ -180,25 +181,35 @@ workflows = {
 
 ### `lua/ai-chat/chat.lua`（リファクタ）
 
-`send()` 内のリクエスト実行部分（`job.start` と `on_text` / `on_done` / `on_error` / `on_usage` の組み立て）を、モジュール内関数 `run_request(opts, req, callbacks)` に切り出す。`send()` は従来の挙動のまま `run_request` を呼び、`workflow.lua` も同じ関数を使う。
+`send()` 内のリクエスト実行部分（`job.start` と `on_text` / `on_done` / `on_error` / `on_usage` の組み立て）を、モジュール内関数 `run_request(opts, req, cb)` に切り出す。`send()` は従来の挙動のまま `run_request` を呼び、`/workflow` も同じ関数を使う。
 
-- `req`：`{ model, system, messages }`
-- `callbacks`：`on_done(text)`（累積した応答全文を渡す）/ `on_error(msg)`
+- `req`：`{ model, system, messages, label_prefix }`（`label_prefix` はスピナーのラベルの前置き。workflow では `<step名>: `）
+- `cb`：
+  - `on_done(text)`：ストリーム完了時（累積した応答全文）。usage の表示より前に呼ばれうる。`send()` はここで assistant メッセージを `state.messages` に積む。
+  - `on_complete(text)`：Deno プロセスが正常終了（exit 0）した後。usage の表示まで済んでいる。workflow はここで次の step に進む（usage 行が次の step の出力に混ざらないようにするため）。
+  - `on_error(msg)`：エラー時。stderr と終了コードの両方から複数回呼ばれうるため、呼び出し側で 1 回に絞る。
 - 出力ペインへの追記、スピナー、usage 表示は `run_request` が共通で行う。
-- `build_system(persona)` は `state.system` の前に persona を挟む形に拡張する。
+- `build_system(user_system, persona, notice)` に拡張し、`BASE_SYSTEM` + `CLAUDE.md` + persona + `state.system` + notice の順に連結する。
+- `M.run_workflow(opts, full_rest)` を追加する。引数の解釈・検証・`@` コンテキストの展開・`workflow.run` の呼び出しを行う。実行中は `state.workflow`（`{ cancelled }`）を持ち、`send()` はこれがあれば送信を拒否する。`stop_job()` は `state.workflow.cancelled = true` にしてからジョブを止める（中断時は `[ERROR]` を表示しない）。
 
 ### `lua/ai-chat/diff.lua` / `lua/ai-chat/chat.lua`（`gA` の範囲限定）
 
 - `diff.find_all_blocks(buf, start_line)`：第 2 引数（任意）を追加し、指定行以降のブロックだけを返す。省略時は従来どおり全ブロック。
 - `chat.apply_all_blocks()`：`state.workflow_edit_start` を `find_all_blocks` に渡す。
-- `workflow.lua` は `edits = true` の step を開始する直前の出力バッファ行数 + 1 を `state.workflow_edit_start` に記録する。
+- `edits = true` の step の見出しを出した直後に、出力バッファの最終行の行番号を `state.workflow_edit_start` に記録する（step の出力はこの最終行に追記されるため、出力が先頭のフェンスで始まっても対象に入る）。`find_all_blocks` は `start_line` 以上で始まるブロックを返す。
 - `commands.lua` の `/clear` と `chat.send()`（通常のチャット送信）で `state.workflow_edit_start = nil` にする。
 
 ### `lua/ai-chat/workflow.lua`（新規）
 
 - `M.load_local()`：`<cwd>/.ai-chat/workflows.lua` を `vim.secure.read()` で読み、`loadstring` で評価してテーブルを返す。ファイルが無い／trust 拒否の場合は `nil`、評価エラーの場合は `nil` とエラーメッセージを返す。
 - `M.resolve(opts)`：ビルトイン `default` < `opts.workflows`（グローバル）< `load_local()`（ローカル）の順にマージし、`{ [name] = { def = ..., source = "builtin"|"global"|"local" } }` を返す。`/workflow` の実行ごとに呼ぶ。
-- `M.run(name, task, state, ctx)`：workflow の実行ループ。
+- `M.run(def, name, task, env)`：workflow の実行ループ。`chat.lua` に依存せず、副作用は `env` 経由で行う（テストでは偽の `env` を渡す）。
+  - `env.model_for(step)` / `env.request(step, user_text, cb)` / `env.print(lines)` / `env.mark_edit_start()` / `env.is_cancelled()` / `env.on_end()`
+- `M.validate(def)`：定義の検証（steps が空／step 名の重複・予約語／必須フィールド欠落／`next`・`rules` の遷移先が存在しない／マーカー名が大文字でない／`max_steps` が不正）。実行前に呼び、問題があれば `[ERROR]` を表示して実行しない。
+- `M.next_step(def, step, marker)`：次の遷移先（step 名 / `COMPLETE` / `ABORT`）と ABORT の理由を返す純粋関数。
+- `M.build_instruction(step, vars)`：`instruction` の展開と、`rules` があるときのマーカー指示の追記。
+- `M.parse_args(full_rest, map)` / `M.list_lines(map)` / `M.merge(global, local)`：引数の分解・一覧表示・マージ（純粋関数）。
+- `M.NOTICE`：workflow 共通の注意書き。
 - `M.default`：ビルトインの `default` workflow 定義（persona / instruction は日本語）。
 - `render(template, vars)`：`{task}` / `{previous_response}` / `{iteration}` の展開。
 - `parse_marker(text)`：最後のマーカー行を取り出し、マーカーを除いた本文と一緒に返す。
@@ -215,7 +226,7 @@ workflows = {
 
 ### `lua/ai-chat/commands.lua`
 
-`handlers.workflow` を追加し、`workflow.run()` を呼ぶ。`@` コンテキストの展開は `chat.lua` 側（`context.build_user_content`）を使うため、`ctx` に `run_workflow` を生やして委譲する。
+`handlers.workflow` を追加し、`ctx.run_workflow(full_rest)` に委譲する。ハンドラには第 5 引数として「コマンド名以降の全文」（2 行目以降を含む）を渡すよう `M.handle` を拡張する（task は複数行になりうるため）。`@` コンテキストの展開は `chat.lua` 側（`context.build_user_content`）を使う。`/clear` は `state.workflow_edit_start` もリセットする。
 
 ### `lua/ai-chat/init.lua`
 
@@ -226,12 +237,13 @@ workflows = {
 | step | persona（要旨） | instruction（要旨） | model | 遷移 |
 | --- | --- | --- | --- | --- |
 | plan | 設計担当。実装はしない | `{task}` から変更方針と対象ファイルを箇条書きで出す | セッションのモデル | → implement |
-| implement | 実装担当 | `{previous_response}` の計画に従い、SEARCH/REPLACE 形式で変更を出す | セッションのモデル | → review |
-| review | レビュー担当。問題点の指摘のみ | 計画と直前の実装をレビュー。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
-| fix | 修正担当 | `{previous_response}` の指摘を反映し、変更を SEARCH/REPLACE 形式で出し直す | セッションのモデル | → review |
+| implement | 実装担当 | `{previous_response}`（plan の出力）の計画に従い、SEARCH/REPLACE 形式で変更を出す | セッションのモデル | → review |
+| review | レビュー担当。問題点の指摘のみ（コードブロックは使わない） | `{task}` と `{last_edit}` の実装をレビュー。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
+| fix | 修正担当 | `{last_edit}`（前回の実装）と `{previous_response}`（レビューの指摘）から、元のファイルに対する変更全体を SEARCH/REPLACE 形式で出し直す | セッションのモデル | → review |
 
 - implement / fix は `edits = true`。
-- review / fix の step が直前の実装を参照できるよう、`{previous_response}` に加えて `{task}` も instruction に含める。plan の出力は implement 以降には渡らない点に注意（review に計画を見せたい場合は instruction 側で `{task}` に計画を含める、または step 間で参照できる変数を後続バージョンで追加する）。
+- 変更は workflow 中に適用されない（元のファイルのまま）ため、fix は前回の実装との差分ではなく、元のファイルに対する変更全体を出し直す。そのために fix には `{last_edit}` を渡す。
+- plan の出力は implement にだけ渡る（review には `{task}` と実装を渡す）。
 - ビルトインではモデルを固定しない（利用者の `providers` / モデル設定に依存させないため）。モデルを分けたい場合はユーザーが `workflows.default` を上書きする。
 
 ## テスト
@@ -259,9 +271,9 @@ Lua 側のテスト基盤を、この機能に先立って導入する（実装�
 
 ### テスト対象
 
-- 基盤の動作確認として、既存の純粋関数 `context.extract_token_keys`（`@` トークンの抽出）のテストを先に書く。
-- workflow 実装時に追加するテスト：`workflow.render`（テンプレート展開・未知変数の保持）、`workflow.parse_marker`（最後のマーカー行の採用・マーカー無し・マーカー除去後の本文）、`workflow.resolve`（ビルトイン < グローバル < ローカルのマージと出所）、遷移判定（`rules` / `next` / `COMPLETE` / `ABORT` / `max_steps`）。これらを副作用のない関数として切り出して書く。
-- 対象外：UI（ウィンドウ・スピナー）と実際の API 通信。これらは手動確認とする。
+- 基盤の動作確認として、既存の純粋関数 `context.extract_token_keys`（`@` トークンの抽出）のテストを先に書く（`test/lua/context_test.lua`）。
+- workflow 実装時に追加したテスト（`test/lua/workflow_test.lua`、`test/lua/diff_test.lua`）：`workflow.render`（テンプレート展開・未知変数の保持）、`workflow.parse_marker`（最後のマーカー行の採用・マーカー無し・マーカー除去後の本文）、`workflow.resolve`（ビルトイン < グローバル < ローカルのマージと出所）、遷移判定（`rules` / `next` / `COMPLETE` / `ABORT` / `max_steps`）、`validate`、`parse_args`、偽の `env` を使った実行ループ（承認・却下ループ・マーカー無し・`max_steps`・エラー・ユーザー中断）、`diff.find_all_blocks` の開始行指定。
+- 対象外：UI（ウィンドウ・スピナー）と実際の API 通信。これらは手動確認とする（偽の `deno` を PATH に置いて `/workflow` を通しで動かす確認は実装時に行った）。
 - Deno 側は今回変更しないため、テストを追加しない（`deno task test` は従来どおり）。
 
 ## 決定事項
@@ -270,6 +282,7 @@ Lua 側のテスト基盤を、この機能に先立って導入する（実装�
 - 各 step は独立した `messages` で実行し、チャットの `state.messages` には書き込まない。workflow 後にチャットで続きを話したい場合は、出力ペインの内容を参照させる（`gp` などの既存手段）。
 - ファイル適用は既存の差分適用（`ga` / `gA`）に任せ、workflow が自動適用することはしない。
 - `rules` のマーカーが取れなかった場合は推測せず `ABORT` する。
+- 次の step へは `on_complete`（Deno プロセス終了後）で進む。ストリーム完了（`on_done`）の時点では usage が未着のことがあり、次の step の出力に usage 行が混ざるため。
 - `@cmd` は workflow 開始時に 1 回だけ実行する（スティッキー非対応の方針は維持）。workflow 中は作業ツリーが変わらない（変更は `ga` / `gA` で適用されるまで反映されない）ため、step ごとに再実行しても同じ出力にしかならず、時間と副作用のコストだけが増える。全 step で 1 回のスナップショットを共有する。
 - workflow 中の AI による `@cmd` 実行依頼は、各 step の `system` で禁止する（受け取る人がいないため）。必要なコマンドはユーザーが task に先に含める。
 - **`gA` の対象範囲**：workflow が implement / fix のように変更（SEARCH/REPLACE ブロック）を出す step を実行するたびに、その step の出力開始行を `state.workflow_edit_start` に記録する（上書き）。`gA` は `state.workflow_edit_start` があればそれ以降のブロックだけを対象にし、無ければ従来どおり全ブロックを対象にする。古い反復で出たブロックは適用されない。`/clear` と通常のチャット送信で `state.workflow_edit_start` をリセットする。
