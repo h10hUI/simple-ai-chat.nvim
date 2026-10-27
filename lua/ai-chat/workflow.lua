@@ -25,7 +25,7 @@ M.default = {
     {
       name = "review",
       persona = "あなたはコードレビュー担当です。問題点の指摘のみを行い、コードの書き直しはしません。指摘にコードブロックは使わず、文章で書いてください。",
-      instruction = "次のタスクに対する実装をレビューしてください。バグ、仕様の取りこぼし、既存コードとの不整合があれば具体的に指摘してください。コード中の `TODO:` コメントは未決定部分の意図的な印なので指摘しないでください。問題がなければ承認、修正が必要なら指摘を具体的に書いて却下してください。\n\n## タスク\n{task}\n\n## 実装\n{last_edit}",
+      instruction = "次のタスクに対する実装をレビューしてください。バグ、仕様の取りこぼし、既存コードとの不整合があれば具体的に指摘してください。コード中の `TODO:` コメントは未決定部分の意図的な印なので指摘しないでください。問題がなければ承認、修正が必要なら指摘を具体的に書いて却下してください。\n\n## 機械検査の結果（フェンス・SEARCH/REPLACE の整合性）\n{edit_check}\n\nここに挙がった問題は必ず指摘して却下してください。\n\n## タスク\n{task}\n\n## 実装\n{last_edit}",
       rules = {
         { marker = "APPROVE", next = "COMPLETE" },
         { marker = "REJECT", next = "fix" },
@@ -52,6 +52,16 @@ function M.render(template, vars)
     if v == nil then return nil end
     return tostring(v)
   end))
+end
+
+M.EDIT_CHECK_OK = "問題は検出されませんでした。"
+
+-- validate_edit の結果を `{edit_check}` 用の文字列にする
+function M.format_edit_check(problems)
+  if #problems == 0 then return M.EDIT_CHECK_OK end
+  local lines = {}
+  for _, p in ipairs(problems) do table.insert(lines, "- " .. p) end
+  return table.concat(lines, "\n")
 end
 
 -- 最後に現れる単独行のマーカー `[NAME]` を取り出す。
@@ -235,11 +245,12 @@ end
 --   request(step, user_text, cb)     1 回のリクエスト。cb = { on_complete(text), on_error(msg) }
 --   print(lines)                     出力ペインへの追記
 --   mark_edit_start()                gA の対象範囲の起点を記録
+--   check_edit(text)                 edits step の出力の機械検査。問題の説明のリストを返す（任意）
 --   is_cancelled()                   ユーザーが中断したか
 --   on_end()                         終了通知（任意）
 function M.run(def, name, task, env)
   local max_steps = def.max_steps or 10
-  local vars = { task = task, previous_response = "", last_edit = "", iteration = 0 }
+  local vars = { task = task, previous_response = "", last_edit = "", edit_check = "", iteration = 0 }
   local count = 0
   local finished = false
 
@@ -270,7 +281,15 @@ function M.run(def, name, task, env)
         handled = true
         local body, marker = M.parse_marker(text)
         vars.previous_response = body
-        if step.edits then vars.last_edit = body end
+        if step.edits then
+          vars.last_edit = body
+          if env.check_edit then
+            vars.edit_check = M.format_edit_check(env.check_edit(body))
+            if vars.edit_check ~= M.EDIT_CHECK_OK then
+              env.print(vim.split("\n[edit check]\n" .. vars.edit_check .. "\n", "\n", { plain = true }))
+            end
+          end
+        end
         local target, reason = M.next_step(def, step, marker)
         if target == "COMPLETE" then
           finish("COMPLETE")
