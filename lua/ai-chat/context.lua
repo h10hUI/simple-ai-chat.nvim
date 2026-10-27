@@ -127,7 +127,7 @@ local function context_cmd(command)
   end
   out = out:gsub("\n+$", "")
   if #notes > 0 then out = out .. "\n" .. table.concat(notes, "\n") end
-  return fence("sh", command, out)
+  return fence("sh", command, out), "─── $ " .. command .. "\n" .. out .. "\n───"
 end
 
 local function format_native_diags(diags)
@@ -246,8 +246,9 @@ function M.build_user_content(prompt, state)
     elseif t.kind == "file" then
       body = context_file(t.arg)
     elseif t.kind == "cmd" then
-      body = context_cmd(t.arg)
-      table.insert(cmd_blocks, body)
+      local display
+      body, display = context_cmd(t.arg)
+      table.insert(cmd_blocks, display)
     end
     if body then
       table.insert(blocks, "<context " .. t.key .. ">\n" .. body)
