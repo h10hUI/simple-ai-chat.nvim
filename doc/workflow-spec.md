@@ -134,7 +134,8 @@ workflows = {
 ### 実行モデル
 
 - 各 step は**独立したリクエスト**。`messages` は `instruction` 展開後の user 1 件のみで、チャットの `state.messages` は参照も更新もしない。step 間の受け渡しは `{task}` と `{previous_response}` だけ。
-- `system` は `BASE_SYSTEM` + `CLAUDE.md` + step の `persona`（+ `/system` で設定されたテキスト）。
+- `system` は `BASE_SYSTEM` + `CLAUDE.md` + step の `persona`（+ `/system` で設定されたテキスト）+ workflow 共通の注意書き。
+- workflow 共通の注意書き：`BASE_SYSTEM` は情報不足のときにユーザーへ `` @cmd:`...` `` の実行を依頼するよう AI に指示しているが、workflow の途中ではそれを受け取る人がいない。そこで各 step の `system` の末尾に「この workflow 中はコマンドを実行できず、実行の依頼もしない。与えられた情報だけで判断し、足りない情報があれば出力にその旨を明記する」という指示を自動で追加する。必要なコマンド出力は、ユーザーが task に `@cmd` で先に含めておく。
 - `@` コンテキスト（`@buf` / `@file` / `@cmd` など）は `/workflow` 実行時に**1 回だけ**展開して `{task}` に埋め込む。`@cmd` が step ごとに再実行されることはない。スティッキーも開始時に 1 回だけ付与する。
 - step の実行中は通常のチャット送信と二重の `/workflow` を拒否する（`state.job_id` と同様のガード）。
 - `<C-c>`（`stop_job`）で実行中の step を停止し、workflow 全体を中断する。
@@ -233,19 +234,51 @@ workflows = {
 - review / fix の step が直前の実装を参照できるよう、`{previous_response}` に加えて `{task}` も instruction に含める。plan の出力は implement 以降には渡らない点に注意（review に計画を見せたい場合は instruction 側で `{task}` に計画を含める、または step 間で参照できる変数を後続バージョンで追加する）。
 - ビルトインではモデルを固定しない（利用者の `providers` / モデル設定に依存させないため）。モデルを分けたい場合はユーザーが `workflows.default` を上書きする。
 
+## テスト
+
+Lua 側のテスト基盤を、この機能に先立って導入する（実装より先に基盤を作る）。外部プラグイン（plenary 等）には依存せず、Neovim 本体だけで動く自前の最小ランナーにする。
+
+### 配置と実行
+
+- 置き場所は `test/lua/`（既存の `test/` は LSP diagnostics 確認用のフィクスチャ置き場で、そこに `lua/` サブディレクトリを足す）。
+- ランナー：`test/lua/run.lua`。テストファイルは `test/lua/*_test.lua`。
+- 実行コマンド（リポジトリルートで）：
+
+  ```bash
+  nvim --headless -u NONE -l test/lua/run.lua
+  ```
+
+  全テスト成功で終了コード 0、1 つでも失敗すれば 1。
+
+### ランナーの仕様
+
+- 起動時に `package.path` へ `<repo>/lua/?.lua` と `<repo>/lua/?/init.lua` を追加し、`require("ai-chat.xxx")` が通るようにする。リポジトリルートは `run.lua` 自身のパスから求める。
+- `test/lua/*_test.lua` を名前順に読み込む。各ファイルは `{ ["テスト名"] = function() ... end }` を `return` する。
+- 各テストは `pcall` で実行し、失敗しても残りを続ける。出力は `ok` / `FAIL` + テスト名で、失敗時はエラーメッセージを添える。最後に `n passed, m failed` を出す。
+- アサーションは標準の `assert` に加え、`test/lua/helper.lua` の `eq(actual, expected)`（`vim.deep_equal` で比較し、不一致時は両方を `vim.inspect` で出す）を使う。
+
+### テスト対象
+
+- 基盤の動作確認として、既存の純粋関数 `context.extract_token_keys`（`@` トークンの抽出）のテストを先に書く。
+- workflow 実装時に追加するテスト：`workflow.render`（テンプレート展開・未知変数の保持）、`workflow.parse_marker`（最後のマーカー行の採用・マーカー無し・マーカー除去後の本文）、`workflow.resolve`（ビルトイン < グローバル < ローカルのマージと出所）、遷移判定（`rules` / `next` / `COMPLETE` / `ABORT` / `max_steps`）。これらを副作用のない関数として切り出して書く。
+- 対象外：UI（ウィンドウ・スピナー）と実際の API 通信。これらは手動確認とする。
+- Deno 側は今回変更しないため、テストを追加しない（`deno task test` は従来どおり）。
+
 ## 決定事項
 
 - 遷移はマーカー行（`[NAME]`）のパースで決める。判定専用の追加リクエスト（takt 方式）は行わない（リクエスト数とコストを増やさないため）。
 - 各 step は独立した `messages` で実行し、チャットの `state.messages` には書き込まない。workflow 後にチャットで続きを話したい場合は、出力ペインの内容を参照させる（`gp` などの既存手段）。
 - ファイル適用は既存の差分適用（`ga` / `gA`）に任せ、workflow が自動適用することはしない。
 - `rules` のマーカーが取れなかった場合は推測せず `ABORT` する。
-- `@cmd` は workflow 開始時に 1 回だけ実行する（スティッキー非対応の方針は維持）。
+- `@cmd` は workflow 開始時に 1 回だけ実行する（スティッキー非対応の方針は維持）。workflow 中は作業ツリーが変わらない（変更は `ga` / `gA` で適用されるまで反映されない）ため、step ごとに再実行しても同じ出力にしかならず、時間と副作用のコストだけが増える。全 step で 1 回のスナップショットを共有する。
+- workflow 中の AI による `@cmd` 実行依頼は、各 step の `system` で禁止する（受け取る人がいないため）。必要なコマンドはユーザーが task に先に含める。
 - **`gA` の対象範囲**：workflow が implement / fix のように変更（SEARCH/REPLACE ブロック）を出す step を実行するたびに、その step の出力開始行を `state.workflow_edit_start` に記録する（上書き）。`gA` は `state.workflow_edit_start` があればそれ以降のブロックだけを対象にし、無ければ従来どおり全ブロックを対象にする。古い反復で出たブロックは適用されない。`/clear` と通常のチャット送信で `state.workflow_edit_start` をリセットする。
   - 「変更を出す step」は、step に `edits = true` を付けて明示する（ビルトインでは implement / fix）。
   - `ga`（カーソル位置のブロックのみ）は影響を受けない。
 - **ローカル設定は Lua ファイル `<cwd>/.ai-chat/workflows.lua`**。JSON は persona / instruction のような長い複数行の文字列が書きづらいため採用しない。コード実行のリスクは `vim.secure.read()` の trust 確認で担保する（Neovim 0.9 以上で利用可能で、プロジェクトの前提バージョンと同じ）。
 - グローバルとローカルは**同名なら workflow 単位で置き換え**、異名なら共存させる。優先順位はビルトイン < グローバル < ローカル。
 - ローカル定義の探索は `getcwd()` のみ。親ディレクトリへの遡りやプロジェクトルート判定（`.git` 探索など）はしない。
+- Lua のテストは外部プラグインを使わない自前ランナー（`test/lua/run.lua`）で行う。配置は既存の `test/` 配下の `test/lua/`。
 - YAML 定義、Faceted Prompting 風のプロンプト分離（policy / knowledge / output contract）、並列 step（`all()` / `any()`）、worktree 隔離、`takt eject` 相当は**初期版のスコープ外**。
 
 ## 使い方
