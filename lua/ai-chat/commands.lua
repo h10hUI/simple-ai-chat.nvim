@@ -4,6 +4,7 @@ local handlers = {}
 
 function handlers.clear(state, _, _, ctx)
   state.messages = {}
+  state.workflow_edit_start = nil
   ctx.append_output_lines({ "", "--- cleared ---", "" })
 end
 
@@ -60,6 +61,10 @@ function handlers.system(state, _, rest, ctx)
   ctx.append_output_lines({ "", "--- system: " .. display .. " ---", "" })
 end
 
+function handlers.workflow(_, _, _, ctx, full_rest)
+  ctx.run_workflow(full_rest)
+end
+
 function M.handle(prompt, state, ctx)
   local first_line = prompt:match("^([^\n]*)")
   local cmd, rest = first_line:match("^/(%S+)%s*(.*)$")
@@ -76,7 +81,10 @@ function M.handle(prompt, state, ctx)
     table.insert(args, arg)
   end
 
-  handler(state, args, rest or "", ctx)
+  -- 複数行のプロンプトでも 2 行目以降を含めた「コマンド名以降の全文」
+  local full_rest = prompt:match("^/%S+[ \t]*(.*)$") or ""
+
+  handler(state, args, rest or "", ctx, full_rest)
   return true
 end
 

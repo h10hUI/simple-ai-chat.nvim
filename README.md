@@ -11,7 +11,9 @@ plugin dependencies.
 - Two-pane chat window (output + input) with streaming responses
 - Context tokens for injecting code into prompts: `@buf`, `@bufs`, `@sel`, `@file:<path>`, `@diag`, `` @cmd:`<command>` ``
 - Sticky context pinned across the session (shown in the input pane's winbar)
-- Slash commands: `/clear`, `/quit`, `/pin`, `/unpin`, `/model`, `/system`
+- Slash commands: `/clear`, `/quit`, `/pin`, `/unpin`, `/model`, `/system`, `/workflow`
+- Workflows: run a plan → implement → review → fix loop with multiple personas
+  (`/workflow`), with transitions decided by the plugin, not the AI
 - Diff-and-apply for AI-generated code blocks, with SEARCH/REPLACE patch format
 - LSP diagnostics integration (Neovim builtin LSP + coc.nvim)
 - Per-model provider routing: switch between Claude and Anthropic-compatible
@@ -197,6 +199,56 @@ Type these in the input pane:
 | `/unpin [tokens...]` | Remove (or clear all if no args) |
 | `/model <name>` | Switch model for the session |
 | `/system <text>` | Append additional system prompt for the session |
+| `/workflow [name] <task>` | Run a workflow (see below). Without arguments, list workflows |
+
+### Workflows
+
+`/workflow` runs a sequence of steps, each one an independent request with its
+own persona. The built-in `default` workflow is
+plan → implement → review → (fix → review)…, ending when the reviewer
+approves or `max_steps` (default 10) is reached.
+
+```
+/workflow @file:lua/ai-chat/job.lua add a timeout
+/workflow review @buf review this buffer
+/workflow @cmd:`git diff` @cmd:`deno task test` fix the failing test
+```
+
+- If the first word matches a workflow name it selects that workflow;
+  otherwise the whole text is the task for `default`.
+- `@` context tokens (including `@cmd`) and sticky context are expanded once,
+  when the workflow starts. The AI cannot run commands during a workflow, so
+  put any command output it needs in the task (`` @cmd:`git diff` ``).
+- Transitions are decided by the plugin: a step with `rules` must end with a
+  marker line such as `[APPROVE]` / `[REJECT]`. A missing or unknown marker
+  aborts the workflow.
+- Press `<C-c>` to stop. Edits are never applied automatically: use `ga` /
+  `gA`. After a workflow, `gA` only applies the blocks from the last step that
+  produced edits, so superseded blocks from earlier iterations are skipped.
+
+Define workflows globally in `setup()` or per project in
+`<cwd>/.ai-chat/workflows.lua`. Project definitions override global ones, which
+override the built-in `default`, by name (a workflow is replaced as a whole).
+The project file is loaded through `vim.secure.read()`, so Neovim asks you to
+trust it first.
+
+```lua
+-- <project>/.ai-chat/workflows.lua  (or `workflows = { ... }` in setup())
+return {
+  review = {
+    max_steps = 4,
+    steps = {
+      { name = "review", persona = "You are a code reviewer.", instruction = "{task}" },
+    },
+  },
+}
+```
+
+Step fields: `name`, `persona`, `instruction` (required); `model`, `rules`
+(`{ marker = "APPROVE", next = "COMPLETE" }`), `next`, `edits` (optional).
+`instruction` can use `{task}`, `{previous_response}`, `{last_edit}` (output of
+the latest `edits = true` step) and `{iteration}`. `next` / rule targets are a
+step name, `COMPLETE` or `ABORT`. See [doc/workflow-spec.md](doc/workflow-spec.md).
 
 ### Diff and apply
 
@@ -240,6 +292,7 @@ Neovim (Lua)
   ├── UI & keymaps         (lua/ai-chat/chat.lua, plugin/ai-chat.lua)
   ├── Context expansion    (lua/ai-chat/context.lua)
   ├── Slash commands       (lua/ai-chat/commands.lua)
+  ├── Workflows            (lua/ai-chat/workflow.lua)
   ├── Diff & apply         (lua/ai-chat/diff.lua)
   └── jobstart() → Deno    (lua/ai-chat/job.lua)
           │ stdin:  JSON { model, system, messages, max_tokens }
@@ -254,8 +307,9 @@ All conversation state lives in Lua.
 
 See [doc/spec.md](doc/spec.md) for the full specification,
 [doc/deepseek-provider-spec.md](doc/deepseek-provider-spec.md) for the provider
-routing design, and [doc/cmd-context-spec.md](doc/cmd-context-spec.md) for the
-`@cmd` context token.
+routing design, [doc/cmd-context-spec.md](doc/cmd-context-spec.md) for the
+`@cmd` context token, and [doc/workflow-spec.md](doc/workflow-spec.md) for
+workflows.
 
 ## License
 

@@ -80,6 +80,7 @@ function M.start(opts)
       if code ~= 0 and not done_emitted then
         opts.on_error("deno exited with code " .. code)
       end
+      if opts.on_exit then opts.on_exit(code) end
     end,
   })
 

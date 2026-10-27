@@ -6,6 +6,8 @@ local default_opts = {
   deno_script = nil,
   -- model 名が match にマッチしたら、その接続先を使う（どれにもマッチしなければ Anthropic）
   providers = {},
+  -- /workflow で使う workflow 定義（名前 -> 定義）。ビルトインの default と <cwd>/.ai-chat/workflows.lua とマージされる
+  workflows = {},
   window = {
     width = 0.4,
     input_height = 5,
