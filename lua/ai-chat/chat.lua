@@ -132,8 +132,15 @@ local function spinner_start(label)
     i = i % #SPINNER_FRAMES + 1
     vim.api.nvim_buf_clear_namespace(buf, spinner_ns, 0, -1)
     local last = vim.api.nvim_buf_line_count(buf) - 1
+    -- 最終行の下の仮想行は、出力がウィンドウを埋めると画面外に出て見えなくなる。
+    -- 最終行は常に表示範囲内なので、その行末に出す。
+    local text = SPINNER_FRAMES[i] .. " " .. state.spinner_label
+    if vim.api.nvim_buf_get_lines(buf, last, last + 1, false)[1] ~= "" then
+      text = " " .. text
+    end
     vim.api.nvim_buf_set_extmark(buf, spinner_ns, last, 0, {
-      virt_lines = { { { SPINNER_FRAMES[i] .. " " .. state.spinner_label, "Comment" } } },
+      virt_text = { { text, "Comment" } },
+      virt_text_pos = "eol",
     })
   end))
 end
@@ -233,6 +240,8 @@ function M.open(opts)
   vim.cmd("topleft vsplit")
   state.output_win = vim.api.nvim_get_current_win()
   vim.cmd("vertical resize " .. math.floor(vim.o.columns * opts.window.width))
+  vim.wo[state.output_win].number = false
+  vim.wo[state.output_win].relativenumber = false
 
   state.output_buf = vim.api.nvim_create_buf(false, true)
   vim.bo[state.output_buf].buftype = "nofile"
