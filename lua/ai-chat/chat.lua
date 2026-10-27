@@ -578,6 +578,9 @@ function M.run_workflow(opts, full_rest)
         state.workflow_edit_start = vim.api.nvim_buf_line_count(state.output_buf)
       end
     end,
+    check_edit = function(text)
+      return diff.validate_edit_for_state(text, state)
+    end,
     is_cancelled = function()
       return run.cancelled
     end,

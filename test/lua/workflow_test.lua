@@ -202,6 +202,31 @@ return {
     eq(env.edit_marks, 2)
   end,
 
+  ["run: edit_check is computed for edits steps and passed to review"] = function()
+    local d = def()
+    d.steps[2].instruction = "B {edit_check}"
+    local env = fake_env({ "impl", "ok\n[APPROVE]" })
+    env.check_edit = function(text)
+      eq(text, "impl")
+      return { "fence broken" }
+    end
+    workflow.run(d, "t", "TASK", env)
+    assert(env.requests[2].text:find("- fence broken", 1, true))
+    assert(has_line(env, "- fence broken"))
+  end,
+
+  ["run: edit_check is empty without check_edit, ok text when clean"] = function()
+    local d = def()
+    d.steps[2].instruction = "B[{edit_check}]"
+    local env = fake_env({ "impl", "ok\n[APPROVE]" })
+    workflow.run(d, "t", "TASK", env)
+    assert(env.requests[2].text:find("B[]", 1, true))
+    local env2 = fake_env({ "impl", "ok\n[APPROVE]" })
+    env2.check_edit = function() return {} end
+    workflow.run(d, "t", "TASK", env2)
+    assert(env2.requests[2].text:find(workflow.EDIT_CHECK_OK, 1, true))
+  end,
+
   ["run: step without marker aborts"] = function()
     local env = fake_env({ "impl", "no marker here" })
     workflow.run(def(), "t", "TASK", env)

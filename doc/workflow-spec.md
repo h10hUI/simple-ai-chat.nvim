@@ -114,6 +114,7 @@ workflows = {
 | `{task}` | `/workflow` に渡されたタスク本文（`@` コンテキスト展開済み） |
 | `{previous_response}` | 直前の step の出力全文（マーカー行を除く） |
 | `{last_edit}` | 直近の `edits = true` の step の出力全文（マーカー行を除く）。まだ実行されていなければ空文字 |
+| `{edit_check}` | 直近の `edits = true` の step の出力に対する機械検査の結果（箇条書き。問題なしなら「問題は検出されませんでした。」）。検査が無効（`env.check_edit` なし）または未実行なら空文字 |
 | `{iteration}` | 現在までに実行した step 数（1 始まり） |
 
 未知の変数はそのまま残す（エラーにしない）。
@@ -204,11 +205,14 @@ workflows = {
 - `M.load_local()`：`<cwd>/.ai-chat/workflows.lua` を `vim.secure.read()` で読み、`loadstring` で評価してテーブルを返す。ファイルが無い／trust 拒否の場合は `nil`、評価エラーの場合は `nil` とエラーメッセージを返す。
 - `M.resolve(opts)`：ビルトイン `default` < `opts.workflows`（グローバル）< `load_local()`（ローカル）の順にマージし、`{ [name] = { def = ..., source = "builtin"|"global"|"local" } }` を返す。`/workflow` の実行ごとに呼ぶ。
 - `M.run(def, name, task, env)`：workflow の実行ループ。`chat.lua` に依存せず、副作用は `env` 経由で行う（テストでは偽の `env` を渡す）。
-  - `env.model_for(step)` / `env.request(step, user_text, cb)` / `env.print(lines)` / `env.mark_edit_start()` / `env.is_cancelled()` / `env.on_end()`
+  - `env.model_for(step)` / `env.request(step, user_text, cb)` / `env.print(lines)` / `env.mark_edit_start()` / `env.check_edit(text)`（任意）/ `env.is_cancelled()` / `env.on_end()`
+  - `edits = true` の step が完了するたびに `env.check_edit(出力本文)` を呼び、結果を `{edit_check}` に入れる。問題があれば出力ペインにも `[edit check]` として表示する。
+- `diff.validate_edit(text, read_target)`：AI の出力に対する機械検査（LLM は使わない）。検査項目は、閉じていないフェンス／コードブロックが 1 つも無い／SEARCH/REPLACE のマーカーの欠落・順序違い／SEARCH が対象の現在内容に存在しない（複数ブロックは逐次適用）。対象の解決は `ga` / `gA` と同じ（パス指定 or チャットを開く直前の編集バッファ。取得できなければ存在確認は省く）。
 - `M.validate(def)`：定義の検証（steps が空／step 名の重複・予約語／必須フィールド欠落／`next`・`rules` の遷移先が存在しない／マーカー名が大文字でない／`max_steps` が不正）。実行前に呼び、問題があれば `[ERROR]` を表示して実行しない。
 - `M.next_step(def, step, marker)`：次の遷移先（step 名 / `COMPLETE` / `ABORT`）と ABORT の理由を返す純粋関数。
 - `M.build_instruction(step, vars)`：`instruction` の展開と、`rules` があるときのマーカー指示の追記。
 - `M.parse_args(full_rest, map)` / `M.list_lines(map)` / `M.merge(global, local)`：引数の分解・一覧表示・マージ（純粋関数）。
+- `M.format_edit_check(problems)`：`diff.validate_edit` の結果を `{edit_check}` 用の文字列にする。
 - `M.NOTICE`：workflow 共通の注意書き。
 - `M.default`：ビルトインの `default` workflow 定義（persona / instruction は日本語）。
 - `render(template, vars)`：`{task}` / `{previous_response}` / `{iteration}` の展開。
@@ -238,7 +242,7 @@ workflows = {
 | --- | --- | --- | --- | --- |
 | plan | 設計担当。実装はしない | `{task}` から変更方針と対象ファイルを箇条書きで出す | セッションのモデル | → implement |
 | implement | 実装担当 | `{previous_response}`（plan の出力）の計画に従い、SEARCH/REPLACE 形式で変更を出す | セッションのモデル | → review |
-| review | レビュー担当。問題点の指摘のみ（コードブロックは使わない） | `{task}` と `{last_edit}` の実装をレビュー。`TODO:` コメントは未決定部分の意図的な印として許容（指摘しない）。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
+| review | レビュー担当。問題点の指摘のみ（コードブロックは使わない） | `{task}` と `{last_edit}` の実装をレビュー。`{edit_check}`（機械検査の結果）に挙がった問題は必ず指摘して却下する。`TODO:` コメントは未決定部分の意図的な印として許容（指摘しない）。問題なければ `[APPROVE]`、あれば指摘と `[REJECT]` | セッションのモデル | APPROVE → COMPLETE / REJECT → fix |
 | fix | 修正担当 | `{last_edit}`（前回の実装）と `{previous_response}`（レビューの指摘）から、元のファイルに対する変更全体を SEARCH/REPLACE 形式で出し直す | セッションのモデル | → review |
 
 - implement / fix は `edits = true`。
@@ -279,6 +283,7 @@ Lua 側のテスト基盤を、この機能に先立って導入する（実装�
 
 ## 決定事項
 
+- 出力の整合性（フェンス・SEARCH/REPLACE）は Lua 側で機械的に検査し、結果を reviewer に渡す（LLM は見落としやすく判定がぶれるため）。検査失敗で review を飛ばして fix へ直接遷移する拡張は、必要になるまで行わない。
 - 遷移はマーカー行（`[NAME]`）のパースで決める。判定専用の追加リクエスト（takt 方式）は行わない（リクエスト数とコストを増やさないため）。
 - 各 step は独立した `messages` で実行し、チャットの `state.messages` には書き込まない。workflow 後にチャットで続きを話したい場合は、出力ペインの内容を参照させる（`gp` などの既存手段）。
 - ファイル適用は既存の差分適用（`ga` / `gA`）に任せ、workflow が自動適用することはしない。

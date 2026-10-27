@@ -48,4 +48,44 @@ return {
     eq(blocks[1].body_lines, { "```lua", "x", "```" })
     eq(blocks[1].end_line, 5)
   end,
+
+  ["validate_edit: clean SEARCH/REPLACE passes"] = function()
+    local text = table.concat({
+      "```lua:a.lua",
+      "<<<<<<< SEARCH",
+      "old",
+      "=======",
+      "new",
+      ">>>>>>> REPLACE",
+      "```",
+    }, "\n")
+    eq(diff.validate_edit(text, function() return { "x", "old", "y" } end), {})
+  end,
+
+  ["validate_edit: unclosed fence and missing code block"] = function()
+    local p = diff.validate_edit("```lua:a.lua\nx", function() return {} end)
+    eq(#p, 1)
+    assert(p[1]:find("閉じていない", 1, true))
+    local q = diff.validate_edit("no code here", function() return {} end)
+    assert(q[1]:find("見つからない", 1, true))
+  end,
+
+  ["validate_edit: broken markers and missing SEARCH text"] = function()
+    local broken = diff.validate_edit(table.concat({
+      "```lua:a.lua", "<<<<<<< SEARCH", "old", "new", "```",
+    }, "\n"), function() return {} end)
+    eq(#broken, 1)
+    local missing = diff.validate_edit(table.concat({
+      "```lua:a.lua", "<<<<<<< SEARCH", "nope", "=======", "new", ">>>>>>> REPLACE", "```",
+    }, "\n"), function() return { "old" } end)
+    eq(#missing, 1)
+    assert(missing[1]:find("not found", 1, true))
+  end,
+
+  ["validate_edit: nil target skips SEARCH existence check"] = function()
+    local text = table.concat({
+      "```lua", "<<<<<<< SEARCH", "nope", "=======", "new", ">>>>>>> REPLACE", "```",
+    }, "\n")
+    eq(diff.validate_edit(text, function() return nil end), {})
+  end,
 }

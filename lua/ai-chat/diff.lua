@@ -7,9 +7,8 @@ local function parse_header(info)
   return info, nil
 end
 
--- start_line を渡すと、その行以降に始まるブロックだけを返す
-function M.find_all_blocks(buf, start_line)
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+-- 行リストからコードブロックを集める。返り値: blocks, unclosed（閉じられないまま終わったブロック、無ければ nil）
+local function parse_blocks(lines, start_line)
   local blocks = {}
   local in_block = false
   local current
@@ -44,7 +43,13 @@ function M.find_all_blocks(buf, start_line)
       end
     end
   end
-  return blocks
+  return blocks, current
+end
+
+-- start_line を渡すと、その行以降に始まるブロックだけを返す
+function M.find_all_blocks(buf, start_line)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  return (parse_blocks(lines, start_line))
 end
 
 function M.find_block_at_cursor(buf, cursor_row)
@@ -95,8 +100,9 @@ local function resolve_target(block, state)
   return nil
 end
 
-local function parse_search_replace(body_lines)
-  local pairs_list = {}
+-- SEARCH/REPLACE ブロックを走査する。返り値: pairs_list, errs（構造の不整合の説明）
+local function scan_search_replace(body_lines)
+  local pairs_list, errs = {}, {}
   local mode = "outside"
   local cur_search, cur_replace
   for _, line in ipairs(body_lines) do
@@ -110,11 +116,29 @@ local function parse_search_replace(body_lines)
       table.insert(pairs_list, { search = cur_search, replace = cur_replace })
       mode = "outside"
     elseif mode == "search" then
+      if line:match("^<<<<<<<%s*SEARCH") or line:match("^>>>>>>>%s*REPLACE") then
+        table.insert(errs, "SEARCH ブロック内に区切り行 `=======` がないまま次のマーカーが現れた")
+      end
       table.insert(cur_search, line)
     elseif mode == "replace" then
+      if line:match("^<<<<<<<%s*SEARCH") then
+        table.insert(errs, "REPLACE の終端 `>>>>>>> REPLACE` がないまま次の `<<<<<<< SEARCH` が現れた")
+      end
       table.insert(cur_replace, line)
+    elseif line:match("^=======%s*$") or line:match("^>>>>>>>%s*REPLACE") then
+      table.insert(errs, "`<<<<<<< SEARCH` に対応しないマーカー行 `" .. line .. "` がある")
     end
   end
+  if mode == "search" then
+    table.insert(errs, "最後の SEARCH ブロックに `=======` も `>>>>>>> REPLACE` もない")
+  elseif mode == "replace" then
+    table.insert(errs, "最後の SEARCH/REPLACE ブロックに終端 `>>>>>>> REPLACE` がない")
+  end
+  return pairs_list, errs
+end
+
+local function parse_search_replace(body_lines)
+  local pairs_list = scan_search_replace(body_lines)
   if #pairs_list == 0 then return nil end
   return pairs_list
 end
@@ -161,6 +185,47 @@ local function apply(target, new_lines)
     vim.api.nvim_buf_set_lines(target.buf, 0, -1, false, new_lines)
     vim.notify("Applied to buffer", vim.log.levels.INFO, { title = "ai-chat" })
   end
+end
+
+-- AI が出した変更（Markdown テキスト）の整合性を機械的に検査する。
+-- read_target(path) は対象ファイルの行リストを返す（path が nil のときは出力ペイン外の既定の対象、
+-- 取得できなければ nil で、その場合 SEARCH の存在確認は行わない）。
+-- 返り値: 問題の説明のリスト（問題なしなら空）
+function M.validate_edit(text, read_target)
+  local problems = {}
+  local blocks, unclosed = parse_blocks(vim.split(text, "\n", { plain = true }))
+  if unclosed then
+    table.insert(problems, string.format(
+      "コードブロックのフェンスが閉じていない（行 %d: `%s`）",
+      unclosed.start_line, (unclosed.lang or "") .. (unclosed.path and (":" .. unclosed.path) or "")
+    ))
+  end
+  if #blocks == 0 and not unclosed then
+    table.insert(problems, "コードブロックが見つからない")
+  end
+  for _, block in ipairs(blocks) do
+    local label = string.format("行 %d のブロック(%s)", block.start_line, block.path or "パス指定なし")
+    local pairs_list, errs = scan_search_replace(block.body_lines)
+    for _, e in ipairs(errs) do
+      table.insert(problems, label .. ": " .. e)
+    end
+    if #pairs_list > 0 and #errs == 0 then
+      local lines = read_target(block.path)
+      if lines then
+        local _, err = apply_pairs(lines, pairs_list)
+        if err then table.insert(problems, label .. ": " .. err) end
+      end
+    end
+  end
+  return problems
+end
+
+-- ga / gA と同じ対象解決（パス指定 or 直前の編集バッファ）で validate_edit を呼ぶ
+function M.validate_edit_for_state(text, state)
+  return M.validate_edit(text, function(path)
+    local target = resolve_target({ path = path }, state)
+    return target and read_target_lines(target) or nil
+  end)
 end
 
 function M.show_diff_for_block(block, state, on_done)
