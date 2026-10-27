@@ -31,4 +31,21 @@ return {
     eq(#diff.find_all_blocks(buf, 7), 0)
     eq(#diff.find_all_blocks(buf, 1), 2)
   end,
+
+  ["find_all_blocks: longer outer fence keeps nested fences in body"] = function()
+    local buf = scratch({
+      "````markdown:README.md",
+      "```lua",
+      "x",
+      "```",
+      "````",
+      "```lua:b.lua",
+      "y",
+      "```",
+    })
+    local blocks = diff.find_all_blocks(buf)
+    eq(vim.tbl_map(function(b) return b.path end, blocks), { "README.md", "b.lua" })
+    eq(blocks[1].body_lines, { "```lua", "x", "```" })
+    eq(blocks[1].end_line, 5)
+  end,
 }
