@@ -143,6 +143,7 @@ User commands: `:AiChatOpen`, `:AiChatClose`, `:AiChatToggle`.
 | `<C-CR>` | insert | Send |
 | `<C-c>` | normal/insert | Stop streaming |
 | `<Esc>` | normal | Focus output pane |
+| `<C-j>` | normal | Focus output pane |
 | `<Up>` / `<Down>` | normal | Prompt history |
 
 ### Context tokens
