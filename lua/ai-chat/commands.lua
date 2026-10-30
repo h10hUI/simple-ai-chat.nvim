@@ -47,7 +47,7 @@ end
 
 function handlers.model(state, args, _, ctx)
   if #args == 0 then
-    ctx.append_output_lines({ "", "[ERROR] /model requires a model name", "" })
+    ctx.append_output_lines({ "", "--- model: " .. ctx.current_model() .. " ---", "" })
     return
   end
   state.session_model = args[1]

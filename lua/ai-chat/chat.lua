@@ -169,12 +169,19 @@ local function output_append(lines)
   scroll_to_bottom(state.output_win, state.output_buf)
 end
 
+-- 送信・workflow・/model 表示で実際に使われるモデル。判定式はここに集約する。
+-- opts.model は init.lua の既定値で必ず入る。
+local function current_model(opts)
+  return state.session_model or opts.model
+end
+
 local function build_cmd_ctx(opts)
   return {
     append_output_lines = output_append,
     update_winbar = update_winbar,
     close = function() M.close() end,
     run_workflow = function(full_rest) M.run_workflow(opts, full_rest) end,
+    current_model = function() return current_model(opts) end,
   }
 end
 
@@ -503,7 +510,7 @@ function M.send(opts)
   state.workflow_edit_start = nil
 
   local effective_prompt = apply_stickies(prompt)
-  local model = state.session_model or opts.model
+  local model = current_model(opts)
   local user_content, cmd_blocks = context.build_user_content(effective_prompt, state)
 
   local out = user_lines(prompt, cmd_blocks)
@@ -557,7 +564,7 @@ function M.run_workflow(opts, full_rest)
   local run = { cancelled = false }
   state.workflow = run
   state.workflow_edit_start = nil
-  local session_model = state.session_model or opts.model
+  local session_model = current_model(opts)
 
   workflow.run(def, name, task_content, {
     model_for = function(step)
