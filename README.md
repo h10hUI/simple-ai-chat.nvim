@@ -12,6 +12,7 @@ plugin dependencies.
 - Context tokens for injecting code into prompts: `@buf`, `@bufs`, `@sel`, `@file:<path>`, `@diag`, `` @cmd:`<command>` ``
 - Sticky context pinned across the session (shown in the input pane's winbar)
 - Slash commands: `/clear`, `/quit`, `/pin`, `/unpin`, `/model`, `/system`, `/workflow`
+- `/model` with no arguments shows the current model (session override or configured default)
 - Workflows: run a plan → implement → review → fix loop with multiple personas
   (`/workflow`), with transitions decided by the plugin, not the AI
 - Diff-and-apply for AI-generated code blocks, with SEARCH/REPLACE patch format
@@ -198,7 +199,7 @@ Type these in the input pane:
 | `/quit` | Close chat |
 | `/pin <tokens...>` | Add tokens to sticky context |
 | `/unpin [tokens...]` | Remove (or clear all if no args) |
-| `/model <name>` | Switch model for the session |
+| `/model [name]` | Switch model for the session (no arguments: show the current model) |
 | `/system <text>` | Append additional system prompt for the session |
 | `/workflow [name] <task>` | Run a workflow (see below). Without arguments, list workflows |
 
